@@ -4,7 +4,7 @@
 Google Sheets UTM 데이터를 시각화하는 Streamlit 대시보드.
 - KPI 카드 (UV, 전환, CVR, 매출)
 - 소스/미디엄/캠페인별 분석 차트
-- 주차별 트렌드
+- 주/일/월별 트렌드 기능 추가
 - UTM 링크 생성기 (구글 시트 자동 적재 기능 추가)
 """
 
@@ -310,24 +310,50 @@ def render_dashboard(df: pd.DataFrame):
     c1, c2 = st.columns([2.2, 1])
 
     with c1:
-        st.markdown('<div class="section-hd">UV & 전환 추이 (주차별)</div>', unsafe_allow_html=True)
-        weekly = (
-            fdf.groupby("주차_시작일", dropna=True)
+        st.markdown('<div class="section-hd">UV & 전환 추이</div>', unsafe_allow_html=True)
+        
+        # 🚨 일간/주간/월간 선택 라디오 버튼 추가
+        time_group = st.radio(
+            "조회 단위", 
+            ["일간", "주간", "월간"], 
+            index=1, 
+            horizontal=True, 
+            label_visibility="collapsed"
+        )
+        
+        # 🚨 선택한 기준에 따라 데이터 그룹핑을 다르게 처리
+        trend_df = fdf.copy()
+        if time_group == "일간":
+            trend_df["기준일"] = trend_df["날짜"].dt.normalize()
+            date_fmt = "%y.%m.%d"
+        elif time_group == "월간":
+            trend_df["기준일"] = trend_df["날짜"].dt.to_period("M").dt.start_time
+            date_fmt = "%y년 %m월"
+        else: # 주간
+            trend_df["기준일"] = trend_df["날짜"].dt.to_period("W").dt.start_time
+            date_fmt = "%y.%m.%d"
+            
+        grouped = (
+            trend_df.groupby("기준일", dropna=True)
             .agg(UV=("UV", "sum"), 전환=("결제완료", "sum"), 매출=("결제금액_num", "sum"))
             .reset_index()
         )
-        weekly = weekly.sort_values("주차_시작일")
-        weekly["주차_표시"] = weekly["주차_시작일"].dt.strftime("%y.%m.%d")
+        
+        grouped = grouped.sort_values("기준일")
+        grouped["표시_날짜"] = grouped["기준일"].dt.strftime(date_fmt)
+        
+        if time_group == "주간":
+            grouped["표시_날짜"] = grouped["표시_날짜"] + "(주)"
 
-        if not weekly.empty:
+        if not grouped.empty:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             
             fig.add_trace(
                 go.Bar(
-                    x=weekly["주차_표시"], y=weekly["UV"], name="UV",
+                    x=grouped["표시_날짜"], y=grouped["UV"], name="UV",
                     marker_color="#C5A774", opacity=0.85,
-                    text=[f"{v:,}" if v > 0 else "" for v in weekly["UV"]],
-                    textposition="outside", # 막대 위에 표시
+                    text=[f"{v:,}" if v > 0 else "" for v in grouped["UV"]],
+                    textposition="outside",
                     textfont=dict(size=11, color="#ccc"),
                 ),
                 secondary_y=False,
@@ -335,11 +361,11 @@ def render_dashboard(df: pd.DataFrame):
             
             fig.add_trace(
                 go.Scatter(
-                    x=weekly["주차_표시"], y=weekly["전환"], name="전환",
+                    x=grouped["표시_날짜"], y=grouped["전환"], name="전환",
                     mode="lines+markers+text",
                     line=dict(color="#FF6B6B", width=3), 
                     marker=dict(size=10, color="#FF6B6B", line=dict(color="white", width=1.5)),
-                    text=[f"{v:,}건" if v > 0 else "" for v in weekly["전환"]],
+                    text=[f"{v:,}건" if v > 0 else "" for v in grouped["전환"]],
                     textposition="top center", 
                     textfont=dict(size=12, color="#FF6B6B"),
                 ),
@@ -355,21 +381,19 @@ def render_dashboard(df: pd.DataFrame):
                 hovermode="x unified", 
             )
             
-            # 🚨 핵심 조치: Y축의 천장 여백(Scale) 비율을 완전히 다르게 주어 겹침 방지!
-            max_uv = weekly["UV"].max()
-            max_conv = weekly["전환"].max()
+            max_uv = grouped["UV"].max()
+            max_conv = grouped["전환"].max()
             
             fig.update_yaxes(
                 title_text="UV", secondary_y=False,
                 gridcolor="rgba(255,255,255,0.04)", showgrid=True,
                 range=[0, max_uv * 1.25 if max_uv > 0 else 10]
             )
-            # 🚨 우측 Y축(전환)의 범위를 2.2배로 뻥튀기하여 꺾은선이 차트의 아랫부분으로 깔리게 함
             fig.update_yaxes(
                 title_text="전환", secondary_y=True,
                 gridcolor="rgba(255,255,255,0.04)", showgrid=False,
                 range=[0, max_conv * 2.2 if max_conv > 0 else 10],
-                tickformat="d" # 🚨 소수점(1.5, 2.5 등)을 없애고 정수 단위로만 표시
+                tickformat="d" 
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -443,7 +467,7 @@ def render_dashboard(df: pd.DataFrame):
         if not med.empty:
             fig = px.pie(
                 med, values="UV", names="utm_medium",
-                color_discrete_sequence=CHART_PALETTE, hole=0.45,
+                color_discrete_sequence=CHART_PALETTE[2:], hole=0.45,
             )
             fig.update_layout(PLOTLY_LAYOUT, height=370, showlegend=True,
                               legend=dict(font=dict(size=11)))
