@@ -550,12 +550,52 @@ def render_generator():
 # ─────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────
+# ─────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────
 def main():
     df, err = load_data()
 
     if df.empty:
         st.error("데이터를 불러올 수 없습니다.")
         if err == "TOKEN_NOT_FOUND":
-            # 👇 여기서부터 시작하는 """ 따옴표가
-            st.markdown("""
-**Streamlit Cloud 배포 시**: Settings > Secrets에 아래 내용을 추가하세요.
+            # 문제의 원인이었던 """ 를 제거하고 일반 문자열로 변경했습니다!
+            st.markdown(
+                "**Streamlit Cloud 배포 시**: Settings > Secrets에 아래 내용을 추가하세요.\n\n"
+                "```\n"
+                "GOOGLE_TOKEN_JSON = '{ ... token.json 내용 ... }'\n"
+                "```\n\n"
+                "**로컬 실행 시 (택1)**:\n"
+                "1. `token.json` 파일을 이 프로젝트 폴더에 복사\n"
+                "2. `GOOGLE_TOKEN_JSON` 환경변수 설정"
+            )
+        elif err:
+            st.warning(f"상세 오류: {err}")
+        return
+
+    # Header
+    hc1, hc2 = st.columns([9, 1])
+    with hc1:
+        st.markdown("## UTM Performance Dashboard")
+        st.caption(
+            f"수壽 마케팅 UTM 성과 추적  |  "
+            f"데이터: {len(df)}건  |  "
+            f"{datetime.now().strftime('%Y-%m-%d %H:%M')} 기준"
+        )
+    with hc2:
+        if st.button("새로고침", help="Google Sheets에서 최신 데이터를 다시 불러옵니다"):
+            st.cache_data.clear()
+            st.rerun()
+
+    # Tabs
+    tab_dash, tab_gen = st.tabs(["📊 Performance", "🔗 UTM Generator"])
+
+    with tab_dash:
+        render_dashboard(df)
+
+    with tab_gen:
+        render_generator()
+
+
+if __name__ == "__main__":
+    main()
