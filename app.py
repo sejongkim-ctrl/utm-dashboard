@@ -193,11 +193,9 @@ def load_data() -> tuple:
 
     df["결제금액_num"] = df["결제금액"].apply(_parse_currency)
 
+    # 🚨 날짜 처리 부분 개편: 주차를 고유한 날짜(Datetime) 객체로 생성하여 정렬 버그 방지
     df["날짜"] = pd.to_datetime(df["생성일"], format="mixed", dayfirst=False, errors="coerce")
-    df["주차"] = df["날짜"].dt.to_period("W").apply(
-        lambda x: x.start_time.strftime("%m/%d") if pd.notna(x) else None
-    )
-    df["월"] = df["날짜"].dt.to_period("M").astype(str)
+    df["주차_시작일"] = df["날짜"].dt.to_period("W").dt.start_time
 
     return df, None
 
@@ -245,7 +243,27 @@ def fmt_num(val: int) -> str:
 # ─────────────────────────────────────────
 def render_dashboard(df: pd.DataFrame):
     # ── Filters ──
-    with st.expander("필터", expanded=False):
+    with st.expander("필터", expanded=True):
+        
+        # 1. 날짜 범위 필터 초기값 계산
+        valid_dates = df["날짜"].dropna()
+        if not valid_dates.empty:
+            min_date = valid_dates.min().date()
+            max_date = valid_dates.max().date()
+        else:
+            min_date = datetime.now().date()
+            max_date = datetime.now().date()
+            
+        # 🚨 날짜 필터 UI 배치
+        date_range = st.date_input(
+            "조회 기간", 
+            value=(min_date, max_date), 
+            min_value=min_date, 
+            max_value=max_date
+        )
+        
+        st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
+        
         fc1, fc2, fc3, fc4 = st.columns(4)
         with fc1:
             sources = ["전체"] + sorted(df["utm_source"].dropna().unique().tolist())
@@ -261,6 +279,17 @@ def render_dashboard(df: pd.DataFrame):
             sel_creator = st.selectbox("생성자", creators)
 
     fdf = df.copy()
+    
+    # 🚨 날짜 필터 데이터 적용
+    if isinstance(date_range, tuple):
+        if len(date_range) == 2: # 시작일과 종료일 모두 선택된 경우
+            fdf = fdf[(fdf["날짜"].dt.date >= date_range[0]) & (fdf["날짜"].dt.date <= date_range[1])]
+        elif len(date_range) == 1: # 시작일만 선택된 경우
+            fdf = fdf[(fdf["날짜"].dt.date >= date_range[0])]
+    elif date_range: # 단일 날짜 선택 시
+        fdf = fdf[(fdf["날짜"].dt.date == date_range)]
+
+    # 기존 조건 필터 데이터 적용
     if sel_source != "전체":
         fdf = fdf[fdf["utm_source"] == sel_source]
     if sel_medium != "전체":
@@ -292,18 +321,21 @@ def render_dashboard(df: pd.DataFrame):
 
     with c1:
         st.markdown('<div class="section-hd">UV & 전환 추이 (주차별)</div>', unsafe_allow_html=True)
+        # 🚨 차트 정렬 기준을 단순 텍스트가 아닌 실제 날짜(주차_시작일)로 변경했습니다!
         weekly = (
-            fdf.groupby("주차", dropna=True)
+            fdf.groupby("주차_시작일", dropna=True)
             .agg(UV=("UV", "sum"), 전환=("결제완료", "sum"), 매출=("결제금액_num", "sum"))
             .reset_index()
         )
-        weekly = weekly[weekly["주차"].notna()].sort_values("주차")
+        # 시간순으로 정렬한 뒤 표시용 텍스트 생성 (예: 26.02.26)
+        weekly = weekly.sort_values("주차_시작일")
+        weekly["주차_표시"] = weekly["주차_시작일"].dt.strftime("%y.%m.%d")
 
         if not weekly.empty:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             fig.add_trace(
                 go.Bar(
-                    x=weekly["주차"], y=weekly["UV"], name="UV",
+                    x=weekly["주차_표시"], y=weekly["UV"], name="UV",
                     marker_color="#C5A774", opacity=0.85,
                     text=weekly["UV"], textposition="outside", textfont_size=10,
                 ),
@@ -311,7 +343,7 @@ def render_dashboard(df: pd.DataFrame):
             )
             fig.add_trace(
                 go.Scatter(
-                    x=weekly["주차"], y=weekly["전환"], name="전환",
+                    x=weekly["주차_표시"], y=weekly["전환"], name="전환",
                     mode="lines+markers+text",
                     line=dict(color="#891C21", width=3),
                     marker=dict(size=10, color="#891C21"),
@@ -336,7 +368,7 @@ def render_dashboard(df: pd.DataFrame):
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("데이터 없음")
+            st.info("선택한 기간에 해당하는 데이터가 없습니다.")
 
     with c2:
         st.markdown('<div class="section-hd">소스별 UV</div>', unsafe_allow_html=True)
@@ -355,7 +387,7 @@ def render_dashboard(df: pd.DataFrame):
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("데이터 없음")
+            st.info("선택한 기간에 해당하는 데이터가 없습니다.")
 
     # ── Row 2: Campaign Performance + Medium Donut ──
     c3, c4 = st.columns([2.2, 1])
@@ -396,7 +428,7 @@ def render_dashboard(df: pd.DataFrame):
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("데이터 없음")
+            st.info("선택한 기간에 해당하는 데이터가 없습니다.")
 
     with c4:
         st.markdown('<div class="section-hd">미디엄별 UV</div>', unsafe_allow_html=True)
@@ -415,7 +447,7 @@ def render_dashboard(df: pd.DataFrame):
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("데이터 없음")
+            st.info("선택한 기간에 해당하는 데이터가 없습니다.")
 
     # ── Row 3: Top Converting UTMs ──
     st.markdown('<div class="section-hd">전환 발생 UTM 상세</div>', unsafe_allow_html=True)
@@ -499,7 +531,6 @@ def render_dashboard(df: pd.DataFrame):
 
     # ── Row 5: Full Data Table ──
     st.markdown('<div class="section-hd">전체 UTM 데이터</div>', unsafe_allow_html=True)
-    # 🚨 여기에 '메모' 열을 추가하여 표에서도 볼 수 있게 했습니다!
     table_cols = [
         "생성일", "생성자", "랜딩 URL", "utm_source", "utm_medium", "utm_campaign",
         "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목", "완성 URL", "메모"
@@ -535,7 +566,6 @@ def render_generator():
     with c2:
         campaign = st.text_input("utm_campaign", placeholder="예: 2602_seolevent")
         content = st.text_input("utm_content", placeholder="예: 260226_kakao")
-        # 🚨 순수 시트 기록용 '메모' 항목을 추가했습니다 (UTM 파라미터에는 들어가지 않음)
         sheet_memo = st.text_input("메모 (선택)", placeholder="시트에 기록될 간단한 메모를 남겨주세요")
 
     if base_url and source and medium and campaign and content:
@@ -571,7 +601,7 @@ def render_generator():
             else:
                 now_str = datetime.now().strftime("%Y. %m. %d")
                 
-                # 🚨 15개 열 구조 (O열에 '메모' 값이 저장되도록 매핑)
+                # 15개 열 구조 (O열에 '메모' 값이 저장되도록 매핑)
                 row_data = [
                     now_str,      # A: 생성일
                     creator,      # B: 생성자
