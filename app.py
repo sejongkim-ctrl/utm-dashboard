@@ -403,12 +403,12 @@ def render_dashboard(df, data_source):
 
     if cur_sel_xs and cur_sel_xs != prev_sel_xs:
         st.session_state["_chart_sel_xs"] = cur_sel_xs
-        for px in cur_sel_xs:
-            if px not in prev_sel_xs:
-                if px in st.session_state.selected_points:
-                    st.session_state.selected_points.remove(px)
+        for sel_x in cur_sel_xs:
+            if sel_x not in prev_sel_xs:
+                if sel_x in st.session_state.selected_points:
+                    st.session_state.selected_points.remove(sel_x)
                 else:
-                    st.session_state.selected_points.append(px)
+                    st.session_state.selected_points.append(sel_x)
         st.rerun()
     elif not cur_sel_xs and prev_sel_xs:
         st.session_state["_chart_sel_xs"] = []
