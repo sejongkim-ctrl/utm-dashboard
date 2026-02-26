@@ -305,7 +305,7 @@ def render_dashboard(df: pd.DataFrame):
                 secondary_y=True,
             )
             fig.update_layout(
-                **PLOTLY_LAYOUT,
+                PLOTLY_LAYOUT,
                 height=370,
                 legend=dict(orientation="h", y=1.15, x=0),
                 xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
@@ -333,7 +333,7 @@ def render_dashboard(df: pd.DataFrame):
                 src, values="UV", names="utm_source",
                 color_discrete_sequence=CHART_PALETTE, hole=0.45,
             )
-            fig.update_layout(**PLOTLY_LAYOUT, height=370, showlegend=True,
+            fig.update_layout(PLOTLY_LAYOUT, height=370, showlegend=True,
                               legend=dict(font=dict(size=11)))
             fig.update_traces(
                 textposition="inside", textinfo="percent+label", textfont_size=11,
@@ -372,7 +372,7 @@ def render_dashboard(df: pd.DataFrame):
                 visible=True,
             ))
             fig.update_layout(
-                **PLOTLY_LAYOUT,
+                PLOTLY_LAYOUT,
                 height=max(320, len(camp) * 32),
                 barmode="overlay",
                 legend=dict(orientation="h", y=1.08, x=0),
@@ -393,7 +393,7 @@ def render_dashboard(df: pd.DataFrame):
                 med, values="UV", names="utm_medium",
                 color_discrete_sequence=CHART_PALETTE[2:], hole=0.45,
             )
-            fig.update_layout(**PLOTLY_LAYOUT, height=370, showlegend=True,
+            fig.update_layout(PLOTLY_LAYOUT, height=370, showlegend=True,
                               legend=dict(font=dict(size=11)))
             fig.update_traces(
                 textposition="inside", textinfo="percent+label", textfont_size=11,
@@ -421,7 +421,7 @@ def render_dashboard(df: pd.DataFrame):
                 textposition="outside", textfont_size=11,
             ))
             fig.update_layout(
-                **PLOTLY_LAYOUT, height=340,
+                PLOTLY_LAYOUT, height=340,
                 margin=dict(l=0, r=0, t=30, b=0),
                 title=dict(text="CVR 순위", font=dict(size=14, color="#C5A774")),
                 xaxis=dict(tickangle=-35, tickfont=dict(size=10)),
@@ -439,7 +439,7 @@ def render_dashboard(df: pd.DataFrame):
                 textposition="outside", textfont_size=11,
             ))
             fig.update_layout(
-                **PLOTLY_LAYOUT, height=340,
+                PLOTLY_LAYOUT, height=340,
                 margin=dict(l=0, r=0, t=30, b=0),
                 title=dict(text="매출 순위", font=dict(size=14, color="#C5A774")),
                 xaxis=dict(tickangle=-35, tickfont=dict(size=10)),
@@ -474,7 +474,7 @@ def render_dashboard(df: pd.DataFrame):
             aspect="auto",
         )
         fig.update_layout(
-            **PLOTLY_LAYOUT,
+            PLOTLY_LAYOUT,
             height=max(200, len(pivot) * 55 + 80),
             margin=dict(l=0, r=0, t=10, b=0),
             coloraxis_showscale=False,
@@ -558,41 +558,3 @@ def main():
         if err == "TOKEN_NOT_FOUND":
             st.markdown("""
 **Streamlit Cloud 배포 시**: Settings > Secrets에 아래 내용을 추가하세요.
-```
-GOOGLE_TOKEN_JSON = '{ ... token.json 내용 ... }'
-```
-
-**로컬 실행 시 (택1)**:
-1. `token.json` 파일을 이 프로젝트 폴더에 복사
-2. `GOOGLE_TOKEN_JSON` 환경변수 설정
-            """)
-        elif err:
-            st.warning(f"상세 오류: {err}")
-        return
-
-    # Header
-    hc1, hc2 = st.columns([9, 1])
-    with hc1:
-        st.markdown("## UTM Performance Dashboard")
-        st.caption(
-            f"수壽 마케팅 UTM 성과 추적  |  "
-            f"데이터: {len(df)}건  |  "
-            f"{datetime.now().strftime('%Y-%m-%d %H:%M')} 기준"
-        )
-    with hc2:
-        if st.button("새로고침", help="Google Sheets에서 최신 데이터를 다시 불러옵니다"):
-            st.cache_data.clear()
-            st.rerun()
-
-    # Tabs
-    tab_dash, tab_gen = st.tabs(["📊 Performance", "🔗 UTM Generator"])
-
-    with tab_dash:
-        render_dashboard(df)
-
-    with tab_gen:
-        render_generator()
-
-
-if __name__ == "__main__":
-    main()
