@@ -376,7 +376,7 @@ def render_dashboard(df: pd.DataFrame):
                 secondary_y=True,
             )
             
-            # 🚨 타원형(Pill) 텍스트 블록 형태의 주석(Annotation) 추가
+# 🚨 텍스트 블록 형태의 주석(Annotation) 추가
             annotations = []
             for _, row in grouped.iterrows():
                 if row["전환"] > 0:
@@ -389,9 +389,9 @@ def render_dashboard(df: pd.DataFrame):
                             text=f"<b>{int(row['전환']):,}건</b>",
                             showarrow=False,
                             yshift=22, # 마커 위쪽으로 살짝 띄움
-                            bgcolor=line_color, # 배경색 (빨강)
+                            bgcolor=line_color, # 배경색 (진한 빨강)
                             borderpad=4, # 블록 내부 여백
-                            bordercornerradius=12, # 타원형 모서리 둥글게!
+                            # bordercornerradius 속성 제거 완료!
                             font=dict(color="white", size=12) # 흰색 글씨
                         )
                     )
