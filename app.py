@@ -556,5 +556,6 @@ def main():
     if df.empty:
         st.error("데이터를 불러올 수 없습니다.")
         if err == "TOKEN_NOT_FOUND":
+            # 👇 여기서부터 시작하는 """ 따옴표가
             st.markdown("""
 **Streamlit Cloud 배포 시**: Settings > Secrets에 아래 내용을 추가하세요.
