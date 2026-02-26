@@ -482,13 +482,14 @@ def render_dashboard(df: pd.DataFrame):
         fig.update_traces(textfont_size=13)
         st.plotly_chart(fig, use_container_width=True)
 
-    # ── Row 5: Full Data Table ──
+# ── Row 5: Full Data Table ──
     st.markdown('<div class="section-hd">전체 UTM 데이터</div>', unsafe_allow_html=True)
     table_cols = [
         "생성일", "생성자", "utm_source", "utm_medium", "utm_campaign",
         "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목",
     ]
-    display_df = fdf[table_cols].sort_values("날짜", ascending=False).reset_index(drop=True)
+    # 👇 [table_cols]의 위치를 정렬(sort_values) 뒤로 옮겼습니다!
+    display_df = fdf.sort_values("날짜", ascending=False)[table_cols].reset_index(drop=True)
     st.dataframe(display_df, use_container_width=True, hide_index=True, height=420)
 
 
