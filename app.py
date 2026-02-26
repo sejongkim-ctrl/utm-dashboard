@@ -147,7 +147,7 @@ def load_data() -> tuple:
         return pd.DataFrame(), f"토큰 JSON 파싱 실패: {e}"
 
     try:
-        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+        creds = Credentials.from_authorized_user_info(token_data)
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
     except Exception as e:
