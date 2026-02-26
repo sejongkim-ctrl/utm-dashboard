@@ -5,6 +5,7 @@ Google Sheets UTM 데이터를 시각화하는 Streamlit 대시보드.
 - KPI 카드 (UV, 전환, CVR, 매출)
 - 소스/미디엄/캠페인별 분석 차트
 - 주/일/월별 트렌드 기능 추가
+- utm_content 기반 스마트 날짜 추출 기능 추가
 - UTM 링크 생성기 (구글 시트 자동 적재 기능 추가)
 """
 
@@ -15,6 +16,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
 import os
+import re  # 🚨 utm_content 날짜 추출을 위한 정규표현식 모듈 추가
 from urllib.parse import urlencode
 from datetime import datetime
 from google.oauth2.credentials import Credentials
@@ -189,7 +191,37 @@ def load_data() -> tuple:
 
     df["결제금액_num"] = df["결제금액"].apply(_parse_currency)
 
-    df["날짜"] = pd.to_datetime(df["생성일"], format="mixed", dayfirst=False, errors="coerce")
+    # 🚨 기존 '생성일' 기반 파싱 (폴백용으로 보존)
+    df["생성일_parsed"] = pd.to_datetime(df["생성일"], format="mixed", dayfirst=False, errors="coerce")
+
+    # 🚨 utm_content 문자열을 분석하여 날짜를 도출하는 함수
+    def parse_utm_date(row):
+        fallback = row["생성일_parsed"]
+        content = str(row.get("utm_content", ""))
+        
+        # 1순위: 6자리 숫자 매칭 (YYMMDD 형식)
+        m6 = re.search(r'(?<!\d)(\d{6})(?!\d)', content)
+        if m6:
+            try:
+                return pd.to_datetime(m6.group(1), format="%y%m%d")
+            except:
+                pass
+                
+        # 2순위: 4자리 숫자 매칭 (MMDD 형식)
+        m4 = re.search(r'(?<!\d)(\d{4})(?!\d)', content)
+        if m4:
+            try:
+                # 연도가 없으므로 생성일 연도를 쓰거나, 없으면 올해 연도 사용
+                year = fallback.year if pd.notna(fallback) else datetime.now().year
+                return pd.to_datetime(f"{year}{m4.group(1)}", format="%Y%m%d")
+            except:
+                pass
+                
+        # 3순위: 위 조건에 모두 안 맞으면 시트의 '생성일' 날짜를 그대로 씀
+        return fallback
+
+    # 모든 행(row)에 대해 스마트 날짜 파싱 적용
+    df["날짜"] = df.apply(parse_utm_date, axis=1)
     df["주차_시작일"] = df["날짜"].dt.to_period("W").dt.start_time
 
     return df, None
@@ -375,7 +407,6 @@ def render_dashboard(df: pd.DataFrame):
                 secondary_y=True,
             )
             
-            # 에러를 수정한 안전한 네모 형태의 배지 텍스트 블록
             annotations = []
             for _, row in grouped.iterrows():
                 if row["전환"] > 0:
@@ -457,8 +488,7 @@ def render_dashboard(df: pd.DataFrame):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Row 2: Top Converting UTMs (위치 변경됨!) ──
-    # 메인 차트 바로 아래에 노출되도록 끌어올렸습니다.
+    # ── Row 2: Top Converting UTMs (Drill-down 기능 적용된 위치) ──
     if selected_date_str:
         st.markdown(f'<div class="section-hd" style="color:#FF6B6B;">🎯 전환 발생 UTM 상세 <span style="color:#FFF;">({selected_date_str})</span></div>', unsafe_allow_html=True)
         st.caption("✔️ 그래프에서 선택한 기간의 데이터입니다. 빈 배경을 더블 클릭하면 전체 기간으로 돌아갑니다.")
@@ -518,9 +548,11 @@ def render_dashboard(df: pd.DataFrame):
             st.plotly_chart(fig, use_container_width=True)
 
         show_cols = [
-            "utm_content", "utm_campaign", "utm_source", "utm_medium",
+            "날짜", "utm_content", "utm_campaign", "utm_source", "utm_medium",
             "UV", "결제완료", "CVR", "결제금액", "결제품목",
         ]
+        # 날짜가 잘 파싱되었는지 볼 수 있도록 테이블 가장 앞에 "날짜" 열을 추가했습니다.
+        converting["날짜"] = converting["날짜"].dt.strftime("%Y-%m-%d")
         st.dataframe(
             converting[show_cols].reset_index(drop=True),
             use_container_width=True, hide_index=True,
@@ -530,7 +562,7 @@ def render_dashboard(df: pd.DataFrame):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Row 3: Campaign Performance + Medium Donut (아래로 밀려남) ──
+    # ── Row 3: Campaign Performance + Medium Donut ──
     c3, c4 = st.columns([2.2, 1])
 
     with c3:
