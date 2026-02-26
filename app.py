@@ -106,9 +106,7 @@ st.markdown("""<style>
 # Google Sheets Auth Helper
 # ─────────────────────────────────────────
 def get_credentials() -> Credentials:
-    """Streamlit Secrets 또는 로컬에서 구글 인증 객체를 가져옵니다."""
     token_json = None
-    
     try:
         token_json = st.secrets["GOOGLE_TOKEN_JSON"]
     except (KeyError, FileNotFoundError):
@@ -143,7 +141,6 @@ def get_credentials() -> Credentials:
 # ─────────────────────────────────────────
 @st.cache_data(ttl=300)
 def load_data() -> tuple:
-    """Google Sheets에서 UTM 데이터 로드 (5분 캐시)"""
     try:
         creds = get_credentials()
     except ValueError as e:
@@ -178,7 +175,6 @@ def load_data() -> tuple:
 
     df = pd.DataFrame(rows, columns=headers)
 
-    # 타입 변환
     df["UV"] = pd.to_numeric(
         df["UV"].astype(str).str.replace(",", ""), errors="coerce"
     ).fillna(0).astype(int)
@@ -193,14 +189,12 @@ def load_data() -> tuple:
 
     df["결제금액_num"] = df["결제금액"].apply(_parse_currency)
 
-    # 🚨 날짜 처리 부분 개편: 주차를 고유한 날짜(Datetime) 객체로 생성하여 정렬 버그 방지
     df["날짜"] = pd.to_datetime(df["생성일"], format="mixed", dayfirst=False, errors="coerce")
     df["주차_시작일"] = df["날짜"].dt.to_period("W").dt.start_time
 
     return df, None
 
 def save_utm_to_sheet(row_data: list):
-    """새로 생성된 UTM 데이터를 구글 시트 맨 아래에 추가합니다."""
     creds = get_credentials()
     service = build("sheets", "v4", credentials=creds, cache_discovery=False)
     
@@ -245,7 +239,6 @@ def render_dashboard(df: pd.DataFrame):
     # ── Filters ──
     with st.expander("필터", expanded=True):
         
-        # 1. 날짜 범위 필터 초기값 계산
         valid_dates = df["날짜"].dropna()
         if not valid_dates.empty:
             min_date = valid_dates.min().date()
@@ -254,7 +247,6 @@ def render_dashboard(df: pd.DataFrame):
             min_date = datetime.now().date()
             max_date = datetime.now().date()
             
-        # 🚨 날짜 필터 UI 배치
         date_range = st.date_input(
             "조회 기간", 
             value=(min_date, max_date), 
@@ -280,16 +272,14 @@ def render_dashboard(df: pd.DataFrame):
 
     fdf = df.copy()
     
-    # 🚨 날짜 필터 데이터 적용
     if isinstance(date_range, tuple):
-        if len(date_range) == 2: # 시작일과 종료일 모두 선택된 경우
+        if len(date_range) == 2:
             fdf = fdf[(fdf["날짜"].dt.date >= date_range[0]) & (fdf["날짜"].dt.date <= date_range[1])]
-        elif len(date_range) == 1: # 시작일만 선택된 경우
+        elif len(date_range) == 1:
             fdf = fdf[(fdf["날짜"].dt.date >= date_range[0])]
-    elif date_range: # 단일 날짜 선택 시
+    elif date_range:
         fdf = fdf[(fdf["날짜"].dt.date == date_range)]
 
-    # 기존 조건 필터 데이터 적용
     if sel_source != "전체":
         fdf = fdf[fdf["utm_source"] == sel_source]
     if sel_medium != "전체":
@@ -321,50 +311,67 @@ def render_dashboard(df: pd.DataFrame):
 
     with c1:
         st.markdown('<div class="section-hd">UV & 전환 추이 (주차별)</div>', unsafe_allow_html=True)
-        # 🚨 차트 정렬 기준을 단순 텍스트가 아닌 실제 날짜(주차_시작일)로 변경했습니다!
         weekly = (
             fdf.groupby("주차_시작일", dropna=True)
             .agg(UV=("UV", "sum"), 전환=("결제완료", "sum"), 매출=("결제금액_num", "sum"))
             .reset_index()
         )
-        # 시간순으로 정렬한 뒤 표시용 텍스트 생성 (예: 26.02.26)
         weekly = weekly.sort_values("주차_시작일")
         weekly["주차_표시"] = weekly["주차_시작일"].dt.strftime("%y.%m.%d")
 
         if not weekly.empty:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
+            
+            # 🚨 1. UV 바 차트: 텍스트를 막대 안쪽으로(inside), 0값 숨김
             fig.add_trace(
                 go.Bar(
                     x=weekly["주차_표시"], y=weekly["UV"], name="UV",
                     marker_color="#C5A774", opacity=0.85,
-                    text=weekly["UV"], textposition="outside", textfont_size=10,
+                    text=[f"{v:,}" if v > 0 else "" for v in weekly["UV"]],
+                    textposition="inside",
+                    insidetextanchor="end", # 막대 안쪽 꼭대기에 정렬
+                    textfont=dict(size=11, color="white"),
                 ),
                 secondary_y=False,
             )
+            
+            # 🚨 2. 전환 꺾은선 차트: 밝은 빨간색, 흰색 테두리 마커, 0값 숨김, '건' 추가
             fig.add_trace(
                 go.Scatter(
                     x=weekly["주차_표시"], y=weekly["전환"], name="전환",
                     mode="lines+markers+text",
-                    line=dict(color="#891C21", width=3),
-                    marker=dict(size=10, color="#891C21"),
-                    text=weekly["전환"], textposition="top center", textfont_size=11,
+                    line=dict(color="#FF6B6B", width=3), 
+                    marker=dict(size=10, color="#FF6B6B", line=dict(color="white", width=1.5)),
+                    text=[f"{v:,}건" if v > 0 else "" for v in weekly["전환"]],
+                    textposition="top center", 
+                    textfont=dict(size=12, color="#FF6B6B"),
                 ),
                 secondary_y=True,
             )
+            
+            # 🚨 3. 레이아웃: 통합 호버(hovermode) 추가
             fig.update_layout(
                 PLOTLY_LAYOUT,
                 height=370,
                 legend=dict(orientation="h", y=1.15, x=0),
                 xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
                 bargap=0.3,
+                hovermode="x unified", # 마우스를 올리면 두 지표가 한 번에 툴팁으로 보임
             )
+            
+            # 🚨 4. 천장 여백 확보 (y축 범위 동적 조절)
+            max_uv = weekly["UV"].max()
+            max_conv = weekly["전환"].max()
+            
             fig.update_yaxes(
                 title_text="UV", secondary_y=False,
                 gridcolor="rgba(255,255,255,0.04)", showgrid=True,
+                range=[0, max_uv * 1.25 if max_uv > 0 else 10]
             )
             fig.update_yaxes(
                 title_text="전환", secondary_y=True,
                 gridcolor="rgba(255,255,255,0.04)", showgrid=False,
+                range=[0, max_conv * 1.35 if max_conv > 0 else 10]
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -404,10 +411,11 @@ def render_dashboard(df: pd.DataFrame):
 
         if not camp.empty:
             fig = go.Figure()
+            # 🚨 여기도 UV 0값 숨김 처리 적용
             fig.add_trace(go.Bar(
                 y=camp["utm_campaign"], x=camp["UV"], name="UV",
                 orientation="h", marker_color="#C5A774", opacity=0.85,
-                text=[f"{v:,}" for v in camp["UV"]], textposition="auto",
+                text=[f"{v:,}" if v > 0 else "" for v in camp["UV"]], textposition="auto",
                 textfont_size=11,
             ))
             fig.add_trace(go.Bar(
@@ -569,7 +577,6 @@ def render_generator():
         sheet_memo = st.text_input("메모 (선택)", placeholder="시트에 기록될 간단한 메모를 남겨주세요")
 
     if base_url and source and medium and campaign and content:
-        # UTM URL에는 필수 파라미터들만 깔끔하게 포함시킵니다
         params = {
             "utm_source": source,
             "utm_medium": medium,
@@ -591,7 +598,7 @@ def render_generator():
         with sc1:
             creator = st.text_input("생성자 이름", placeholder="예: 홍길동 (담당자명)")
         with sc2:
-            st.write("") # 줄맞춤을 위한 빈 공간
+            st.write("") 
             st.write("")
             save_clicked = st.button("시트에 추가하기", use_container_width=True)
 
@@ -601,30 +608,29 @@ def render_generator():
             else:
                 now_str = datetime.now().strftime("%Y. %m. %d")
                 
-                # 15개 열 구조 (O열에 '메모' 값이 저장되도록 매핑)
                 row_data = [
-                    now_str,      # A: 생성일
-                    creator,      # B: 생성자
-                    base_url,     # C: 랜딩 URL
-                    source,       # D: utm_source
-                    medium,       # E: utm_medium
-                    campaign,     # F: utm_campaign
-                    content,      # G: utm_content
-                    0,            # H: UV
-                    0,            # I: 결제완료
-                    "0%",         # J: CVR
-                    "-",          # K: 결제금액
-                    "-",          # L: 결제품목
-                    full_url,     # M: 완성 URL
-                    "",           # N: bit (빈칸)
-                    sheet_memo    # O: 메모 (입력한 메모값 저장)
+                    now_str,      
+                    creator,      
+                    base_url,     
+                    source,       
+                    medium,       
+                    campaign,     
+                    content,      
+                    0,            
+                    0,            
+                    "0%",         
+                    "-",          
+                    "-",          
+                    full_url,     
+                    "",           
+                    sheet_memo    
                 ]
                 
                 with st.spinner("구글 시트에 데이터를 전송하는 중..."):
                     try:
                         save_utm_to_sheet(row_data)
                         st.success("✅ 구글 시트에 성공적으로 저장되었습니다! 대시보드에 즉시 반영됩니다.")
-                        st.cache_data.clear() # 캐시를 초기화해서 대시보드에 바로 보이도록 함
+                        st.cache_data.clear() 
                     except Exception as e:
                         st.error(f"저장 중 오류가 발생했습니다: {e}")
 
