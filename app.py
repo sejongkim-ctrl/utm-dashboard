@@ -220,12 +220,16 @@ def _parse_currency(val) -> int:
         return 0
 
 
+# 🚨 한국 원화 단위로 포맷팅 함수 전면 수정
 def fmt_currency(val: int) -> str:
-    if val >= 1_000_000:
-        return f"₩{val / 1_000_000:.1f}M"
-    if val >= 1_000:
-        return f"₩{val / 1_000:.0f}K"
-    return f"₩{val:,}"
+    if val == 0:
+        return "0원"
+    elif val >= 100_000_000: # 1억 이상
+        return f"{val / 100_000_000:.1f}억원"
+    elif val >= 10_000: # 1만 이상
+        return f"{val / 10_000:.0f}만원"
+    else: # 1만 미만
+        return f"{val:,}원"
 
 
 def fmt_num(val: int) -> str:
@@ -301,6 +305,7 @@ def render_dashboard(df: pd.DataFrame):
     k1.metric("Total UV", fmt_num(total_uv))
     k2.metric("결제 전환", fmt_num(total_purchase))
     k3.metric("Overall CVR", f"{overall_cvr:.2f}%")
+    # 🚨 수정된 fmt_currency 함수 적용됨
     k4.metric("총 매출", fmt_currency(total_revenue))
     k5.metric("활성 UTM", f"{active_utms} / {total_utms}")
 
@@ -312,7 +317,6 @@ def render_dashboard(df: pd.DataFrame):
     with c1:
         st.markdown('<div class="section-hd">UV & 전환 추이</div>', unsafe_allow_html=True)
         
-        # 🚨 일간/주간/월간 선택 라디오 버튼 추가
         time_group = st.radio(
             "조회 단위", 
             ["일간", "주간", "월간"], 
@@ -321,7 +325,6 @@ def render_dashboard(df: pd.DataFrame):
             label_visibility="collapsed"
         )
         
-        # 🚨 선택한 기준에 따라 데이터 그룹핑을 다르게 처리
         trend_df = fdf.copy()
         if time_group == "일간":
             trend_df["기준일"] = trend_df["날짜"].dt.normalize()
@@ -329,7 +332,7 @@ def render_dashboard(df: pd.DataFrame):
         elif time_group == "월간":
             trend_df["기준일"] = trend_df["날짜"].dt.to_period("M").dt.start_time
             date_fmt = "%y년 %m월"
-        else: # 주간
+        else: 
             trend_df["기준일"] = trend_df["날짜"].dt.to_period("W").dt.start_time
             date_fmt = "%y.%m.%d"
             
@@ -359,15 +362,17 @@ def render_dashboard(df: pd.DataFrame):
                 secondary_y=False,
             )
             
+            # 🚨 전환 꺾은선 차트 스타일 개선 (진한 빨강, 글자 크기 증가, 볼드)
+            line_color = "#FF3333" # 더 진하고 선명한 빨강
             fig.add_trace(
                 go.Scatter(
                     x=grouped["표시_날짜"], y=grouped["전환"], name="전환",
                     mode="lines+markers+text",
-                    line=dict(color="#FF6B6B", width=3), 
-                    marker=dict(size=10, color="#FF6B6B", line=dict(color="white", width=1.5)),
+                    line=dict(color=line_color, width=3), 
+                    marker=dict(size=11, color=line_color, line=dict(color="white", width=1.5)),
                     text=[f"{v:,}건" if v > 0 else "" for v in grouped["전환"]],
                     textposition="top center", 
-                    textfont=dict(size=12, color="#FF6B6B"),
+                    textfont=dict(size=14, color=line_color, weight="bold"), # 글자 크기 14, 볼드 적용
                 ),
                 secondary_y=True,
             )
@@ -511,6 +516,7 @@ def render_dashboard(df: pd.DataFrame):
                 x=converting["utm_content"],
                 y=converting["결제금액_num"],
                 marker_color="#C5A774", opacity=0.9,
+                # 🚨 하단 그래프에도 수정된 fmt_currency 적용됨
                 text=[fmt_currency(v) for v in converting["결제금액_num"]],
                 textposition="outside", textfont_size=11,
             ))
