@@ -220,15 +220,14 @@ def _parse_currency(val) -> int:
         return 0
 
 
-# 🚨 한국 원화 단위로 포맷팅 함수 전면 수정
 def fmt_currency(val: int) -> str:
     if val == 0:
         return "0원"
-    elif val >= 100_000_000: # 1억 이상
+    elif val >= 100_000_000:
         return f"{val / 100_000_000:.1f}억원"
-    elif val >= 10_000: # 1만 이상
+    elif val >= 10_000:
         return f"{val / 10_000:.0f}만원"
-    else: # 1만 미만
+    else:
         return f"{val:,}원"
 
 
@@ -305,7 +304,6 @@ def render_dashboard(df: pd.DataFrame):
     k1.metric("Total UV", fmt_num(total_uv))
     k2.metric("결제 전환", fmt_num(total_purchase))
     k3.metric("Overall CVR", f"{overall_cvr:.2f}%")
-    # 🚨 수정된 fmt_currency 함수 적용됨
     k4.metric("총 매출", fmt_currency(total_revenue))
     k5.metric("활성 UTM", f"{active_utms} / {total_utms}")
 
@@ -314,8 +312,12 @@ def render_dashboard(df: pd.DataFrame):
     # ── Row 1: Timeline + Source Donut ──
     c1, c2 = st.columns([2.2, 1])
 
+    # 그래프 클릭 이벤트로 선택된 날짜값을 담을 변수
+    selected_date_str = None
+
     with c1:
         st.markdown('<div class="section-hd">UV & 전환 추이</div>', unsafe_allow_html=True)
+        st.caption("✨ 그래프의 막대나 점을 클릭하면 하단의 '전환 발생 UTM 상세' 데이터가 필터링됩니다.")
         
         time_group = st.radio(
             "조회 단위", 
@@ -362,28 +364,46 @@ def render_dashboard(df: pd.DataFrame):
                 secondary_y=False,
             )
             
-            # 🚨 전환 꺾은선 차트 스타일 개선 (진한 빨강, 글자 크기 증가, 볼드)
-            line_color = "#FF3333" # 더 진하고 선명한 빨강
+            # 🚨 꺾은선 차트 본체 (텍스트는 제거하고 라인과 마커만 남김)
+            line_color = "#FF3333"
             fig.add_trace(
                 go.Scatter(
                     x=grouped["표시_날짜"], y=grouped["전환"], name="전환",
-                    mode="lines+markers+text",
+                    mode="lines+markers",
                     line=dict(color=line_color, width=3), 
                     marker=dict(size=11, color=line_color, line=dict(color="white", width=1.5)),
-                    text=[f"{v:,}건" if v > 0 else "" for v in grouped["전환"]],
-                    textposition="top center", 
-                    textfont=dict(size=14, color=line_color, weight="bold"), # 글자 크기 14, 볼드 적용
                 ),
                 secondary_y=True,
             )
             
+            # 🚨 타원형(Pill) 텍스트 블록 형태의 주석(Annotation) 추가
+            annotations = []
+            for _, row in grouped.iterrows():
+                if row["전환"] > 0:
+                    annotations.append(
+                        dict(
+                            x=row["표시_날짜"],
+                            y=row["전환"],
+                            xref="x",
+                            yref="y2", # 전환축 기준
+                            text=f"<b>{int(row['전환']):,}건</b>",
+                            showarrow=False,
+                            yshift=22, # 마커 위쪽으로 살짝 띄움
+                            bgcolor=line_color, # 배경색 (빨강)
+                            borderpad=4, # 블록 내부 여백
+                            bordercornerradius=12, # 타원형 모서리 둥글게!
+                            font=dict(color="white", size=12) # 흰색 글씨
+                        )
+                    )
+
             fig.update_layout(
                 PLOTLY_LAYOUT,
                 height=370,
                 legend=dict(orientation="h", y=1.15, x=0),
                 xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
                 bargap=0.3,
-                hovermode="x unified", 
+                hovermode="x unified",
+                annotations=annotations # 생성한 텍스트 블록 적용
             )
             
             max_uv = grouped["UV"].max()
@@ -400,7 +420,23 @@ def render_dashboard(df: pd.DataFrame):
                 range=[0, max_conv * 2.2 if max_conv > 0 else 10],
                 tickformat="d" 
             )
-            st.plotly_chart(fig, use_container_width=True)
+            
+            # 🚨 클릭 이벤트를 감지하도록 설정 (on_select="rerun")
+            chart_selection = st.plotly_chart(
+                fig, 
+                use_container_width=True, 
+                on_select="rerun", 
+                selection_mode="points",
+                key="trend_chart"
+            )
+            
+            # 선택된 포인트가 있다면 x값(표시_날짜)을 변수에 저장
+            try:
+                if chart_selection and hasattr(chart_selection, "selection") and chart_selection.selection.points:
+                    selected_date_str = chart_selection.selection.points[0]["x"]
+            except Exception:
+                pass
+            
         else:
             st.info("선택한 기간에 해당하는 데이터가 없습니다.")
 
@@ -483,9 +519,25 @@ def render_dashboard(df: pd.DataFrame):
         else:
             st.info("선택한 기간에 해당하는 데이터가 없습니다.")
 
-    # ── Row 3: Top Converting UTMs ──
-    st.markdown('<div class="section-hd">전환 발생 UTM 상세</div>', unsafe_allow_html=True)
-    converting = fdf[fdf["결제완료"] > 0].sort_values("CVR_num", ascending=False)
+    # ── Row 3: Top Converting UTMs (Drill-down 기능 적용) ──
+    # 그래프를 클릭했는지 여부에 따라 섹션 제목 변경
+    if selected_date_str:
+        st.markdown(f'<div class="section-hd">전환 발생 UTM 상세 <span style="color:#FFF;">({selected_date_str})</span></div>', unsafe_allow_html=True)
+        st.caption("✔️ 상단 그래프에서 선택한 날짜/주차의 데이터만 보여줍니다. 빈 배경을 더블 클릭하면 선택이 해제됩니다.")
+        
+        # 선택된 날짜 문자열과 일치하도록 fdf 포맷팅 후 필터링
+        drill_df = fdf.copy()
+        if time_group == "일간":
+            drill_df["표시_날짜"] = drill_df["날짜"].dt.normalize().dt.strftime("%y.%m.%d")
+        elif time_group == "월간":
+            drill_df["표시_날짜"] = drill_df["날짜"].dt.to_period("M").dt.start_time.dt.strftime("%y년 %m월")
+        else: 
+            drill_df["표시_날짜"] = drill_df["날짜"].dt.to_period("W").dt.start_time.dt.strftime("%y.%m.%d") + "(주)"
+            
+        converting = drill_df[(drill_df["결제완료"] > 0) & (drill_df["표시_날짜"] == selected_date_str)].sort_values("CVR_num", ascending=False)
+    else:
+        st.markdown('<div class="section-hd">전환 발생 UTM 상세 <span style="font-size: 13px; color: #888; font-weight: normal;">(조회 기간 전체)</span></div>', unsafe_allow_html=True)
+        converting = fdf[fdf["결제완료"] > 0].sort_values("CVR_num", ascending=False)
 
     if not converting.empty:
         cc1, cc2 = st.columns(2)
@@ -516,7 +568,6 @@ def render_dashboard(df: pd.DataFrame):
                 x=converting["utm_content"],
                 y=converting["결제금액_num"],
                 marker_color="#C5A774", opacity=0.9,
-                # 🚨 하단 그래프에도 수정된 fmt_currency 적용됨
                 text=[fmt_currency(v) for v in converting["결제금액_num"]],
                 textposition="outside", textfont_size=11,
             ))
@@ -529,7 +580,6 @@ def render_dashboard(df: pd.DataFrame):
             )
             st.plotly_chart(fig, use_container_width=True)
 
-        # 전환 UTM 테이블
         show_cols = [
             "utm_content", "utm_campaign", "utm_source", "utm_medium",
             "UV", "결제완료", "CVR", "결제금액", "결제품목",
@@ -539,7 +589,7 @@ def render_dashboard(df: pd.DataFrame):
             use_container_width=True, hide_index=True,
         )
     else:
-        st.info("전환이 발생한 UTM이 없습니다.")
+        st.info("해당 기간에 전환이 발생한 UTM이 없습니다.")
 
     # ── Row 4: Source × Medium Heatmap ──
     st.markdown('<div class="section-hd">소스 x 미디엄 UV 히트맵</div>', unsafe_allow_html=True)
