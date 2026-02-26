@@ -154,7 +154,7 @@ st.markdown("""<style>
 .block-container {padding-top: 2.5rem; padding-bottom: 2rem;}
 
 @keyframes fadeSlideUp { 0% { opacity: 0; transform: translateY(12px); } 100% { opacity: 1; transform: translateY(0); } }
-.stPlotlyChart, .stDataFrame, [data-testid="stMetric"], .section-hd, .drilldown-wrap { animation: fadeSlideUp 0.45s ease-out forwards; }
+.stPlotlyChart, .stDataFrame, [data-testid="stMetric"], .section-hd { animation: fadeSlideUp 0.45s ease-out forwards; }
 
 /* KPI 메트릭 카드 */
 [data-testid="stMetric"] {
@@ -188,15 +188,11 @@ st.markdown("""<style>
     border: 1px solid rgba(255, 51, 51, 0.25);
 }
 
-/* 드릴다운 영역 */
-.drilldown-wrap {
-    margin-top: 36px;
-    padding: 24px 28px;
-    background: rgba(197, 167, 116, 0.06);
-    border-radius: 16px;
-    border: 1px solid rgba(197, 167, 116, 0.25);
+/* 드릴다운 컨테이너 (st.container border 스타일 오버라이드) */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border-color: rgba(197, 167, 116, 0.25) !important;
+    border-radius: 14px !important;
 }
-.drilldown-wrap h4 { margin-top: 0; }
 
 /* 날짜 태그 */
 .date-tag {
@@ -493,54 +489,57 @@ def render_dashboard(df, data_source="redash"):
 
     # ── Drill-down View ──
     if st.session_state.selected_points:
-        st.markdown('<div class="drilldown-wrap">', unsafe_allow_html=True)
-        st.markdown("#### 🎯 선택된 기간 상세 성과")
+        st.write("")
+        st.divider()
+        st.write("")
 
-        tag_cols = st.columns([0.12, 0.88])
-        with tag_cols[0]:
-            if st.button("선택 초기화 ✖️", key="clear_btn"): st.session_state.selected_points = []; st.rerun()
-        with tag_cols[1]:
-            tags_html = "".join([f'<span class="date-tag">{p}</span>' for p in st.session_state.selected_points])
-            st.markdown(tags_html, unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown("#### 🎯 선택된 기간 상세 성과")
 
-        detail_df = chart_df[chart_df["g"].isin(st.session_state.selected_points)].sort_values("결제완료", ascending=False)
+            tag_cols = st.columns([0.12, 0.88])
+            with tag_cols[0]:
+                if st.button("선택 초기화 ✖️", key="clear_btn"): st.session_state.selected_points = []; st.rerun()
+            with tag_cols[1]:
+                tags_html = "".join([f'<span class="date-tag">{p}</span>' for p in st.session_state.selected_points])
+                st.markdown(tags_html, unsafe_allow_html=True)
 
-        # 선택 기간 집계 KPI
-        sel_grp = grp[grp["g"].isin(st.session_state.selected_points)]
-        if not sel_grp.empty:
-            st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
-            sk1, sk2, sk3, sk4 = st.columns(4)
-            sel_uv = sel_grp["UV"].sum()
-            sel_pay = sel_grp["pay"].sum()
-            sk1.metric("선택 UV", f"{sel_uv:,}")
-            sk2.metric("선택 전환", f"{sel_pay:,}")
-            sk3.metric("선택 CVR", f"{(sel_pay/sel_uv*100 if sel_uv>0 else 0):.2f}%")
-            sel_rev = detail_df["결제금액_num"].sum()
-            sk4.metric("선택 매출", fmt_currency(sel_rev))
+            detail_df = chart_df[chart_df["g"].isin(st.session_state.selected_points)].sort_values("결제완료", ascending=False)
 
-        if not detail_df.empty:
-            conv_df = detail_df[detail_df["결제완료"] > 0]
-            if not conv_df.empty:
-                st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
-                sc1, sc2 = st.columns(2)
-                drill_margin = dict(l=60, r=15, t=40, b=40)
-                with sc1:
-                    fig_cvr = px.bar(conv_df, x="utm_content", y="CVR_num", title="CVR (%)", color_discrete_sequence=["#C5A774"], text_auto=".2f")
-                    fig_cvr.update_layout(PLOTLY_LAYOUT, margin=drill_margin, height=320, xaxis_tickangle=-30)
-                    fig_cvr.update_yaxes(ticksuffix="%")
-                    st.plotly_chart(fig_cvr, use_container_width=True)
-                with sc2:
-                    fig_rev = px.bar(conv_df, x="utm_content", y="결제금액_num", title="매출액", color_discrete_sequence=["#891C21"], text_auto=",.0f")
-                    fig_rev.update_layout(PLOTLY_LAYOUT, margin=drill_margin, height=320, xaxis_tickangle=-30)
-                    fig_rev.update_yaxes(tickformat=",d", ticksuffix="원")
-                    st.plotly_chart(fig_rev, use_container_width=True)
+            # 선택 기간 집계 KPI
+            sel_grp = grp[grp["g"].isin(st.session_state.selected_points)]
+            if not sel_grp.empty:
+                st.write("")
+                sk1, sk2, sk3, sk4 = st.columns(4)
+                sel_uv = sel_grp["UV"].sum()
+                sel_pay = sel_grp["pay"].sum()
+                sk1.metric("선택 UV", f"{sel_uv:,}")
+                sk2.metric("선택 전환", f"{sel_pay:,}")
+                sk3.metric("선택 CVR", f"{(sel_pay/sel_uv*100 if sel_uv>0 else 0):.2f}%")
+                sel_rev = detail_df["결제금액_num"].sum()
+                sk4.metric("선택 매출", fmt_currency(sel_rev))
 
-            st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
-            display_detail = detail_df.copy()
-            display_detail["최초유입"] = display_detail["날짜_dt"].dt.strftime("%Y-%m-%d")
-            st.dataframe(display_detail[["최초유입", "utm_content", "utm_campaign", "utm_source", "UV", "결제완료", "CVR", "결제금액", "결제품목"]].reset_index(drop=True), use_container_width=True, hide_index=True)
-        else: st.info("선택한 날짜에 데이터가 없습니다.")
-        st.markdown('</div>', unsafe_allow_html=True)
+            if not detail_df.empty:
+                conv_df = detail_df[detail_df["결제완료"] > 0]
+                if not conv_df.empty:
+                    st.write("")
+                    sc1, sc2 = st.columns(2)
+                    drill_margin = dict(l=60, r=15, t=40, b=40)
+                    with sc1:
+                        fig_cvr = px.bar(conv_df, x="utm_content", y="CVR_num", title="CVR (%)", color_discrete_sequence=["#C5A774"], text_auto=".2f")
+                        fig_cvr.update_layout(PLOTLY_LAYOUT, margin=drill_margin, height=320, xaxis_tickangle=-30)
+                        fig_cvr.update_yaxes(ticksuffix="%")
+                        st.plotly_chart(fig_cvr, use_container_width=True)
+                    with sc2:
+                        fig_rev = px.bar(conv_df, x="utm_content", y="결제금액_num", title="매출액", color_discrete_sequence=["#891C21"], text_auto=",.0f")
+                        fig_rev.update_layout(PLOTLY_LAYOUT, margin=drill_margin, height=320, xaxis_tickangle=-30)
+                        fig_rev.update_yaxes(tickformat=",d", ticksuffix="원")
+                        st.plotly_chart(fig_rev, use_container_width=True)
+
+                st.write("")
+                display_detail = detail_df.copy()
+                display_detail["최초유입"] = display_detail["날짜_dt"].dt.strftime("%Y-%m-%d")
+                st.dataframe(display_detail[["최초유입", "utm_content", "utm_campaign", "utm_source", "UV", "결제완료", "CVR", "결제금액", "결제품목"]].reset_index(drop=True), use_container_width=True, hide_index=True)
+            else: st.info("선택한 날짜에 데이터가 없습니다.")
 
     st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
     c_sub1, c_sub2 = st.columns([2, 1])
