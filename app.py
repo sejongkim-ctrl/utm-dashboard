@@ -6,7 +6,8 @@ Google Sheets UTM 데이터를 시각화하는 Streamlit 대시보드.
 - 소스/미디엄/캠페인별 분석 차트
 - 주/일/월별 트렌드 기능 추가
 - utm_content 기반 스마트 날짜 추출 기능 추가
-- 메인 차트 클릭 시 상세 데이터 Drill-down 토글 (기본 숨김)
+- 부드러운 UI 로딩 애니메이션 적용
+- X축 연동형 Drill-down 기능 적용
 - UTM 링크 생성기 (구글 시트 자동 적재 기능 추가)
 """
 
@@ -54,7 +55,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────
-# Custom CSS
+# Custom CSS (🚨 부드러운 애니메이션 효과 추가!)
 # ─────────────────────────────────────────
 st.markdown("""<style>
 /* Hide Streamlit defaults */
@@ -62,6 +63,15 @@ st.markdown("""<style>
 
 /* Overall spacing */
 .block-container {padding-top: 1.5rem; padding-bottom: 1rem;}
+
+/* 🚨 Smooth Fade & Slide-up Animation */
+@keyframes fadeSlideUp {
+    0% { opacity: 0; transform: translateY(15px); }
+    100% { opacity: 1; transform: translateY(0); }
+}
+.stPlotlyChart, .stDataFrame, [data-testid="stMetric"], .section-hd {
+    animation: fadeSlideUp 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
 
 /* KPI metric override */
 [data-testid="stMetric"] {
@@ -338,11 +348,11 @@ def render_dashboard(df: pd.DataFrame):
     # ── Row 1: Timeline + Source Donut ──
     c1, c2 = st.columns([2.2, 1])
 
-    selected_date_str = None
+    # X축 목록을 담을 변수
+    x_axis_options = ["전체 기간 조회"]
 
     with c1:
         st.markdown('<div class="section-hd">UV & 전환 추이</div>', unsafe_allow_html=True)
-        st.caption("✨ 그래프의 막대나 점을 클릭하면 상세 UTM 성과가 나타납니다. 빈 배경을 더블클릭하면 닫힙니다.")
         
         time_group = st.radio(
             "조회 단위", 
@@ -376,6 +386,8 @@ def render_dashboard(df: pd.DataFrame):
             grouped["표시_날짜"] = grouped["표시_날짜"] + "(주)"
 
         if not grouped.empty:
+            x_axis_options = ["전체 기간 조회"] + grouped["표시_날짜"].tolist()
+            
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             
             fig.add_trace(
@@ -443,19 +455,8 @@ def render_dashboard(df: pd.DataFrame):
                 tickformat="d" 
             )
             
-            chart_selection = st.plotly_chart(
-                fig, 
-                use_container_width=True, 
-                on_select="rerun", 
-                selection_mode="points",
-                key="trend_chart"
-            )
-            
-            try:
-                if chart_selection and hasattr(chart_selection, "selection") and chart_selection.selection.points:
-                    selected_date_str = chart_selection.selection.points[0]["x"]
-            except Exception:
-                pass
+            # 🚨 불필요한 차트 클릭 기능 제거 (더 이상 차트 선택 시 시각적 어색함이 없음)
+            st.plotly_chart(fig, use_container_width=True)
             
         else:
             st.info("선택한 기간에 해당하는 데이터가 없습니다.")
@@ -481,75 +482,85 @@ def render_dashboard(df: pd.DataFrame):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Row 2: Top Converting UTMs (기본 숨김 & 클릭 시에만 노출) ──
-    # 사용자가 차트의 특정 구간을 클릭했을 때만 해당 블록이 렌더링됩니다.
-    if selected_date_str:
-        st.markdown(f'<div class="section-hd" style="color:#FF6B6B;">🎯 {selected_date_str} 기준 상세 성과</div>', unsafe_allow_html=True)
+    # ── Row 2: Top Converting UTMs (X축 연동형 Drill-down) ──
+    st.markdown('<div class="section-hd" style="color:#FF6B6B;">🎯 상세 성과 조회 (Drill-down)</div>', unsafe_allow_html=True)
+    
+    # 🚨 X축 역할을 대신할 직관적인 선택기 제공
+    selected_x = st.selectbox(
+        "📊 상세 데이터를 확인할 X축(일자/주차/월간)을 아래에서 선택하세요:",
+        options=x_axis_options,
+        index=0
+    )
+
+    drill_df = fdf.copy()
+    if time_group == "일간":
+        drill_df["표시_날짜"] = drill_df["날짜"].dt.normalize().dt.strftime("%y.%m.%d")
+    elif time_group == "월간":
+        drill_df["표시_날짜"] = drill_df["날짜"].dt.to_period("M").dt.start_time.dt.strftime("%y년 %m월")
+    else: 
+        drill_df["표시_날짜"] = drill_df["날짜"].dt.to_period("W").dt.start_time.dt.strftime("%y.%m.%d") + "(주)"
         
-        drill_df = fdf.copy()
-        if time_group == "일간":
-            drill_df["표시_날짜"] = drill_df["날짜"].dt.normalize().dt.strftime("%y.%m.%d")
-        elif time_group == "월간":
-            drill_df["표시_날짜"] = drill_df["날짜"].dt.to_period("M").dt.start_time.dt.strftime("%y년 %m월")
-        else: 
-            drill_df["표시_날짜"] = drill_df["날짜"].dt.to_period("W").dt.start_time.dt.strftime("%y.%m.%d") + "(주)"
-            
-        converting = drill_df[(drill_df["결제완료"] > 0) & (drill_df["표시_날짜"] == selected_date_str)].sort_values("CVR_num", ascending=False)
+    if selected_x != "전체 기간 조회":
+        converting = drill_df[(drill_df["결제완료"] > 0) & (drill_df["표시_날짜"] == selected_x)].sort_values("CVR_num", ascending=False)
+        st.caption(f"✔️ **{selected_x}** 기준 전환 발생 UTM 데이터입니다.")
+    else:
+        converting = drill_df[drill_df["결제완료"] > 0].sort_values("CVR_num", ascending=False)
+        st.caption("✔️ **조회 기간 전체**의 전환 발생 UTM 데이터입니다.")
 
-        if not converting.empty:
-            cc1, cc2 = st.columns(2)
+    if not converting.empty:
+        cc1, cc2 = st.columns(2)
 
-            with cc1:
-                fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    x=converting["utm_content"],
-                    y=converting["CVR_num"],
-                    marker_color=[
-                        "#891C21" if v >= 2 else "#C5A774" for v in converting["CVR_num"]
-                    ],
-                    text=[f"{v:.1f}%" for v in converting["CVR_num"]],
-                    textposition="outside", textfont_size=11,
-                ))
-                fig.update_layout(
-                    PLOTLY_LAYOUT, height=340,
-                    margin=dict(l=0, r=0, t=30, b=0),
-                    title=dict(text="CVR 순위", font=dict(size=14, color="#C5A774")),
-                    xaxis=dict(tickangle=-35, tickfont=dict(size=10)),
-                    yaxis=dict(title="CVR (%)", gridcolor="rgba(255,255,255,0.04)"),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-            with cc2:
-                fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    x=converting["utm_content"],
-                    y=converting["결제금액_num"],
-                    marker_color="#C5A774", opacity=0.9,
-                    text=[fmt_currency(v) for v in converting["결제금액_num"]],
-                    textposition="outside", textfont_size=11,
-                ))
-                fig.update_layout(
-                    PLOTLY_LAYOUT, height=340,
-                    margin=dict(l=0, r=0, t=30, b=0),
-                    title=dict(text="매출 순위", font=dict(size=14, color="#C5A774")),
-                    xaxis=dict(tickangle=-35, tickfont=dict(size=10)),
-                    yaxis=dict(title="매출 (₩)", gridcolor="rgba(255,255,255,0.04)"),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-            show_cols = [
-                "날짜", "utm_content", "utm_campaign", "utm_source", "utm_medium",
-                "UV", "결제완료", "CVR", "결제금액", "결제품목",
-            ]
-            converting["날짜"] = converting["날짜"].dt.strftime("%Y-%m-%d")
-            st.dataframe(
-                converting[show_cols].reset_index(drop=True),
-                use_container_width=True, hide_index=True,
+        with cc1:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=converting["utm_content"],
+                y=converting["CVR_num"],
+                marker_color=[
+                    "#891C21" if v >= 2 else "#C5A774" for v in converting["CVR_num"]
+                ],
+                text=[f"{v:.1f}%" for v in converting["CVR_num"]],
+                textposition="outside", textfont_size=11,
+            ))
+            fig.update_layout(
+                PLOTLY_LAYOUT, height=340,
+                margin=dict(l=0, r=0, t=30, b=0),
+                title=dict(text="CVR 순위", font=dict(size=14, color="#C5A774")),
+                xaxis=dict(tickangle=-35, tickfont=dict(size=10)),
+                yaxis=dict(title="CVR (%)", gridcolor="rgba(255,255,255,0.04)"),
             )
-        else:
-            st.info(f"선택하신 {selected_date_str} 구간에는 전환이 발생한 UTM 내역이 없습니다.")
+            st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("<br>", unsafe_allow_html=True)
+        with cc2:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=converting["utm_content"],
+                y=converting["결제금액_num"],
+                marker_color="#C5A774", opacity=0.9,
+                text=[fmt_currency(v) for v in converting["결제금액_num"]],
+                textposition="outside", textfont_size=11,
+            ))
+            fig.update_layout(
+                PLOTLY_LAYOUT, height=340,
+                margin=dict(l=0, r=0, t=30, b=0),
+                title=dict(text="매출 순위", font=dict(size=14, color="#C5A774")),
+                xaxis=dict(tickangle=-35, tickfont=dict(size=10)),
+                yaxis=dict(title="매출 (₩)", gridcolor="rgba(255,255,255,0.04)"),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        show_cols = [
+            "날짜", "utm_content", "utm_campaign", "utm_source", "utm_medium",
+            "UV", "결제완료", "CVR", "결제금액", "결제품목",
+        ]
+        converting["날짜"] = converting["날짜"].dt.strftime("%Y-%m-%d")
+        st.dataframe(
+            converting[show_cols].reset_index(drop=True),
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.info("해당 기간에 전환이 발생한 UTM이 없습니다.")
+
+    st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Row 3: Campaign Performance + Medium Donut ──
     c3, c4 = st.columns([2.2, 1])
