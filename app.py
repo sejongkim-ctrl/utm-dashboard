@@ -158,7 +158,8 @@ def load_data() -> tuple:
         result = (
             service.spreadsheets()
             .values()
-            .get(spreadsheetId=SPREADSHEET_ID, range=f"'{SHEET_NAME}'!A1:L")
+            # 🚨 시트 열 개수에 맞춰 A1:O 로 범위를 넓혔습니다.
+            .get(spreadsheetId=SPREADSHEET_ID, range=f"'{SHEET_NAME}'!A1:O")
             .execute()
         )
     except Exception as e:
@@ -497,11 +498,11 @@ def render_dashboard(df: pd.DataFrame):
         fig.update_traces(textfont_size=13)
         st.plotly_chart(fig, use_container_width=True)
 
-    # ── Row 5: Full Data Table (수정 완료!) ──
+    # ── Row 5: Full Data Table ──
     st.markdown('<div class="section-hd">전체 UTM 데이터</div>', unsafe_allow_html=True)
     table_cols = [
-        "생성일", "생성자", "utm_source", "utm_medium", "utm_campaign",
-        "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목",
+        "생성일", "생성자", "랜딩 URL", "utm_source", "utm_medium", "utm_campaign",
+        "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목", "완성 URL"
     ]
     display_df = fdf.sort_values("날짜", ascending=False)[table_cols].reset_index(drop=True)
     st.dataframe(display_df, use_container_width=True, hide_index=True, height=420)
@@ -534,7 +535,7 @@ def render_generator():
     with c2:
         campaign = st.text_input("utm_campaign", placeholder="예: 2602_seolevent")
         content = st.text_input("utm_content", placeholder="예: 260226_kakao")
-        term = st.text_input("utm_term (선택)", placeholder="검색 키워드")
+        term = st.text_input("메모 / 검색 키워드 (선택)", placeholder="검색 키워드 또는 메모 입력")
 
     if base_url and source and medium and campaign and content:
         params = {
@@ -543,9 +544,7 @@ def render_generator():
             "utm_campaign": campaign,
             "utm_content": content,
         }
-        if term:
-            params["utm_term"] = term
-
+        
         separator = "&" if "?" in base_url else "?"
         full_url = f"{base_url}{separator}{urlencode(params)}"
 
@@ -568,21 +567,25 @@ def render_generator():
             if not creator:
                 st.warning("생성자 이름을 먼저 입력해주세요!")
             else:
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                # 시트 A~L열 구조에 맞춰 데이터를 만듭니다. 수치 지표는 0으로 기본 세팅합니다.
+                now_str = datetime.now().strftime("%Y. %m. %d")
+                
+                # 🚨 시트의 15개 열 구조에 완벽하게 맞춘 데이터 배열입니다!
                 row_data = [
                     now_str,      # A: 생성일
                     creator,      # B: 생성자
-                    source,       # C: utm_source
-                    medium,       # D: utm_medium
-                    campaign,     # E: utm_campaign
-                    content,      # F: utm_content
-                    0,            # G: UV
-                    0,            # H: 결제완료
-                    "0%",         # I: CVR
-                    0,            # J: 결제금액
-                    term if term else "", # K: 결제품목 (term 데이터가 있다면 이 위치에 저장)
-                    full_url      # L: 전체 URL
+                    base_url,     # C: 랜딩 URL
+                    source,       # D: utm_source
+                    medium,       # E: utm_medium
+                    campaign,     # F: utm_campaign
+                    content,      # G: utm_content
+                    0,            # H: UV
+                    0,            # I: 결제완료
+                    "0%",         # J: CVR
+                    "-",          # K: 결제금액
+                    "-",          # L: 결제품목
+                    full_url,     # M: 완성 URL
+                    "",           # N: bit (빈칸)
+                    term if term else "" # O: 메모 (term으로 입력받은 값 저장)
                 ]
                 
                 with st.spinner("구글 시트에 데이터를 전송하는 중..."):
