@@ -142,7 +142,7 @@ CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 CACHE_PATH = os.path.join(CACHE_DIR, "utm_performance.csv")
 
 CHART_PALETTE = ["#C5A774", "#891C21", "#4ECDC4", "#45B7D1", "#D4636C", "#96648C", "#7BC67E", "#E5D4B0", "#FF9F43", "#6B1419", "#A68B5B", "#FF6B6B"]
-PLOTLY_LAYOUT = dict(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#ccc"), margin=dict(l=0, r=0, t=10, b=0))
+PLOTLY_LAYOUT = dict(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#ccc"), margin=dict(l=55, r=15, t=10, b=25))
 
 st.set_page_config(page_title="UTM Performance Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
@@ -151,54 +151,82 @@ st.set_page_config(page_title="UTM Performance Dashboard", page_icon="📊", lay
 # ─────────────────────────────────────────
 st.markdown("""<style>
 #MainMenu, footer {visibility: hidden;}
-.block-container {padding-top: 3rem; padding-bottom: 2rem;}
+.block-container {padding-top: 2.5rem; padding-bottom: 2rem;}
 
-@keyframes fadeSlideUp { 0% { opacity: 0; transform: translateY(15px); } 100% { opacity: 1; transform: translateY(0); } }
-.stPlotlyChart, .stDataFrame, [data-testid="stMetric"], .section-hd, .drilldown-box { animation: fadeSlideUp 0.5s ease-out forwards; }
+@keyframes fadeSlideUp { 0% { opacity: 0; transform: translateY(12px); } 100% { opacity: 1; transform: translateY(0); } }
+.stPlotlyChart, .stDataFrame, [data-testid="stMetric"], .section-hd, .drilldown-wrap { animation: fadeSlideUp 0.45s ease-out forwards; }
 
-[data-testid="stMetric"] { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border: 1px solid rgba(197, 167, 116, 0.2); border-radius: 10px; padding: 16px 20px; text-align: center; }
-[data-testid="stMetricLabel"] { font-size: 12px !important; color: #888 !important; text-transform: uppercase; justify-content: center !important; }
-[data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 700 !important; justify-content: center !important; }
+/* KPI 메트릭 카드 */
+[data-testid="stMetric"] {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border: 1px solid rgba(197, 167, 116, 0.2);
+    border-radius: 12px;
+    padding: 18px 20px;
+    text-align: center;
+    transition: border-color 0.2s;
+}
+[data-testid="stMetric"]:hover { border-color: rgba(197, 167, 116, 0.5); }
+[data-testid="stMetricLabel"] { font-size: 11px !important; color: #777 !important; text-transform: uppercase; letter-spacing: 0.5px; justify-content: center !important; }
+[data-testid="stMetricValue"] { font-size: 28px !important; font-weight: 700 !important; justify-content: center !important; }
 
-.section-hd { font-size: 15px; font-weight: 600; color: #C5A774; margin: 20px 0 8px; padding-bottom: 6px; border-bottom: 1px solid rgba(197, 167, 116, 0.15); }
-.stDataFrame {font-size: 13px;}
+/* 섹션 헤딩 */
+.section-hd { font-size: 15px; font-weight: 600; color: #C5A774; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid rgba(197, 167, 116, 0.15); }
 
+/* 데이터 테이블 */
+.stDataFrame { font-size: 13px; }
+
+/* 차트 클릭 안내 */
 .click-hint-badge {
-    background-color: rgba(255, 51, 51, 0.15);
+    background-color: rgba(255, 51, 51, 0.12);
     color: #FF6B6B;
     padding: 8px 14px;
     border-radius: 8px;
     font-size: 13px;
     font-weight: 600;
     display: inline-block;
-    margin-bottom: 15px;
-    border: 1px solid rgba(255, 51, 51, 0.3);
+    margin-bottom: 12px;
+    border: 1px solid rgba(255, 51, 51, 0.25);
 }
 
+/* 드릴다운 영역 */
+.drilldown-wrap {
+    margin-top: 36px;
+    padding: 24px 28px;
+    background: rgba(197, 167, 116, 0.06);
+    border-radius: 16px;
+    border: 1px solid rgba(197, 167, 116, 0.25);
+}
+.drilldown-wrap h4 { margin-top: 0; }
+
+/* 날짜 태그 */
 .date-tag {
     display: inline-block;
-    background-color: rgba(197, 167, 116, 0.2);
+    background-color: rgba(197, 167, 116, 0.18);
     color: #C5A774;
-    padding: 2px 10px;
-    border-radius: 5px;
-    border: 1px solid #C5A774;
-    margin-right: 5px;
-    margin-bottom: 5px;
-    font-size: 14px;
+    padding: 3px 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(197, 167, 116, 0.5);
+    margin-right: 6px;
+    margin-bottom: 6px;
+    font-size: 13px;
     font-weight: 600;
 }
 
+/* 데이터 소스 배지 */
 .data-source-badge {
     display: inline-block;
-    background-color: rgba(78, 205, 196, 0.15);
+    background-color: rgba(78, 205, 196, 0.12);
     color: #4ECDC4;
     padding: 4px 12px;
     border-radius: 6px;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
-    border: 1px solid rgba(78, 205, 196, 0.3);
-    margin-bottom: 10px;
+    border: 1px solid rgba(78, 205, 196, 0.25);
+    margin-bottom: 8px;
 }
+
+/* 섹션 간 여백 */
+.section-spacer { margin-top: 20px; }
 </style>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────
@@ -441,7 +469,7 @@ def render_dashboard(df, data_source="redash"):
                 fig.add_annotation(x=r["g"], y=r["pay"], yref="y2", text=f"<b>{int(r['pay'])}건</b>", showarrow=False, yshift=25,
                                    bgcolor="#FF3333" if not is_sel else "white", font=dict(color="white" if not is_sel else "#FF3333", size=13), borderpad=5)
 
-        fig.update_layout(PLOTLY_LAYOUT, height=400, hovermode="x", clickmode="event+select", xaxis=dict(showgrid=False, tickangle=-45))
+        fig.update_layout(PLOTLY_LAYOUT, height=420, hovermode="x", clickmode="event+select", margin=dict(l=55, r=15, t=15, b=50), xaxis=dict(showgrid=False, tickangle=-45))
         fig.update_yaxes(secondary_y=False, range=[0, grp["UV"].max()*1.3] if not grp.empty else [0, 1])
         fig.update_yaxes(secondary_y=True, range=[0, grp["pay"].max()*2.5] if not grp.empty and grp["pay"].max() > 0 else [0, 1], showgrid=False)
 
@@ -465,21 +493,22 @@ def render_dashboard(df, data_source="redash"):
 
     # ── Drill-down View ──
     if st.session_state.selected_points:
-        st.markdown(f'<div class="drilldown-box" style="background:rgba(197, 167, 116, 0.1); padding:20px; border-radius:15px; border:1px solid #C5A774;">', unsafe_allow_html=True)
+        st.markdown('<div class="drilldown-wrap">', unsafe_allow_html=True)
         st.markdown("#### 🎯 선택된 기간 상세 성과")
-        tag_cols = st.columns([0.15, 0.85])
+
+        tag_cols = st.columns([0.12, 0.88])
         with tag_cols[0]:
             if st.button("선택 초기화 ✖️", key="clear_btn"): st.session_state.selected_points = []; st.rerun()
         with tag_cols[1]:
             tags_html = "".join([f'<span class="date-tag">{p}</span>' for p in st.session_state.selected_points])
             st.markdown(tags_html, unsafe_allow_html=True)
 
-        # 선택 기간의 모든 UTM 표시 (전환 유무 관계없이)
         detail_df = chart_df[chart_df["g"].isin(st.session_state.selected_points)].sort_values("결제완료", ascending=False)
 
         # 선택 기간 집계 KPI
         sel_grp = grp[grp["g"].isin(st.session_state.selected_points)]
         if not sel_grp.empty:
+            st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
             sk1, sk2, sk3, sk4 = st.columns(4)
             sel_uv = sel_grp["UV"].sum()
             sel_pay = sel_grp["pay"].sum()
@@ -490,27 +519,37 @@ def render_dashboard(df, data_source="redash"):
             sk4.metric("선택 매출", fmt_currency(sel_rev))
 
         if not detail_df.empty:
-            # 전환 있는 UTM만 차트에 표시
             conv_df = detail_df[detail_df["결제완료"] > 0]
             if not conv_df.empty:
+                st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
                 sc1, sc2 = st.columns(2)
-                with sc1: st.plotly_chart(px.bar(conv_df, x="utm_content", y="CVR_num", title="CVR (%)", color_discrete_sequence=["#C5A774"], text_auto=".1f").update_layout(PLOTLY_LAYOUT), use_container_width=True)
-                with sc2: st.plotly_chart(px.bar(conv_df, x="utm_content", y="결제금액_num", title="매출액 (원)", color_discrete_sequence=["#891C21"]).update_layout(PLOTLY_LAYOUT), use_container_width=True)
+                drill_margin = dict(l=60, r=15, t=40, b=40)
+                with sc1:
+                    fig_cvr = px.bar(conv_df, x="utm_content", y="CVR_num", title="CVR (%)", color_discrete_sequence=["#C5A774"], text_auto=".2f")
+                    fig_cvr.update_layout(PLOTLY_LAYOUT, margin=drill_margin, height=320, xaxis_tickangle=-30)
+                    fig_cvr.update_yaxes(ticksuffix="%")
+                    st.plotly_chart(fig_cvr, use_container_width=True)
+                with sc2:
+                    fig_rev = px.bar(conv_df, x="utm_content", y="결제금액_num", title="매출액", color_discrete_sequence=["#891C21"], text_auto=",.0f")
+                    fig_rev.update_layout(PLOTLY_LAYOUT, margin=drill_margin, height=320, xaxis_tickangle=-30)
+                    fig_rev.update_yaxes(tickformat=",d", ticksuffix="원")
+                    st.plotly_chart(fig_rev, use_container_width=True)
 
+            st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
             display_detail = detail_df.copy()
             display_detail["최초유입"] = display_detail["날짜_dt"].dt.strftime("%Y-%m-%d")
             st.dataframe(display_detail[["최초유입", "utm_content", "utm_campaign", "utm_source", "UV", "결제완료", "CVR", "결제금액", "결제품목"]].reset_index(drop=True), use_container_width=True, hide_index=True)
         else: st.info("선택한 날짜에 데이터가 없습니다.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
     c_sub1, c_sub2 = st.columns([2, 1])
     with c_sub1:
         st.markdown('<div class="section-hd">캠페인 성과</div>', unsafe_allow_html=True)
         cp = fdf.groupby("utm_campaign").agg(UV=("UV","sum"), pay=("결제완료","sum")).reset_index().sort_values("UV")
         fig_cp = go.Figure()
         fig_cp.add_trace(go.Bar(y=cp["utm_campaign"], x=cp["UV"], orientation="h", marker_color="#C5A774", name="UV"))
-        fig_cp.update_layout(PLOTLY_LAYOUT, height=max(300, len(cp)*30))
+        fig_cp.update_layout(PLOTLY_LAYOUT, height=max(300, len(cp)*30), margin=dict(l=120, r=15, t=10, b=25))
         st.plotly_chart(fig_cp, use_container_width=True)
     with c_sub2:
         st.markdown('<div class="section-hd">미디엄 비중</div>', unsafe_allow_html=True)
