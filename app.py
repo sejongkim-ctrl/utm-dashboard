@@ -5,7 +5,7 @@ Google Sheets UTM 데이터를 시각화하는 Streamlit 대시보드.
 - KPI 카드 (UV, 전환, CVR, 매출)
 - 소스/미디엄/캠페인별 분석 차트
 - 주차별 트렌드
-- UTM 링크 생성기
+- UTM 링크 생성기 (구글 시트 자동 적재 기능 추가)
 """
 
 import streamlit as st
@@ -17,13 +17,15 @@ import json
 import os
 from urllib.parse import urlencode
 from datetime import datetime
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
 
 # ─────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────
 SPREADSHEET_ID = "1MTS1Aa8NmAbcvnpPs78LsQmAImSLbSHwEp5QbKE7JbI"
 SHEET_NAME = "UTM생성기"
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 CHART_PALETTE = [
     "#C5A774", "#891C21", "#4ECDC4", "#45B7D1",
@@ -101,33 +103,20 @@ st.markdown("""<style>
 
 
 # ─────────────────────────────────────────
-# Data Loading
+# Google Sheets Auth Helper
 # ─────────────────────────────────────────
-@st.cache_data(ttl=300)
-def load_data() -> tuple:
-    """Google Sheets에서 UTM 데이터 로드 (5분 캐시).
-    Returns: (DataFrame, error_message_or_None)
-    """
-    from google.oauth2.credentials import Credentials
-    from google.auth.transport.requests import Request
-    from googleapiclient.discovery import build
-
-    # 토큰 로드: st.secrets → 환경변수 → 로컬 파일
+def get_credentials() -> Credentials:
+    """Streamlit Secrets 또는 로컬에서 구글 인증 객체를 가져옵니다."""
     token_json = None
-
-    # 1) Streamlit Cloud secrets (배포 환경)
+    
     try:
         token_json = st.secrets["GOOGLE_TOKEN_JSON"]
     except (KeyError, FileNotFoundError):
         pass
-    except Exception as e:
-        return pd.DataFrame(), f"st.secrets 읽기 실패: {type(e).__name__}: {e}"
 
-    # 2) 환경변수
     if not token_json:
         token_json = os.getenv("GOOGLE_TOKEN_JSON")
 
-    # 3) 로컬 파일
     if not token_json:
         for path in [
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "token.json"),
@@ -139,17 +128,28 @@ def load_data() -> tuple:
                 break
 
     if not token_json:
-        return pd.DataFrame(), "TOKEN_NOT_FOUND"
+        raise ValueError("TOKEN_NOT_FOUND")
 
-    try:
-        token_data = json.loads(token_json)
-    except json.JSONDecodeError as e:
-        return pd.DataFrame(), f"토큰 JSON 파싱 실패: {e}"
+    token_data = json.loads(token_json)
+    creds = Credentials.from_authorized_user_info(token_data)
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    
+    return creds
 
+
+# ─────────────────────────────────────────
+# Data Loading & Saving
+# ─────────────────────────────────────────
+@st.cache_data(ttl=300)
+def load_data() -> tuple:
+    """Google Sheets에서 UTM 데이터 로드 (5분 캐시)"""
     try:
-        creds = Credentials.from_authorized_user_info(token_data)
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+        creds = get_credentials()
+    except ValueError as e:
+        if str(e) == "TOKEN_NOT_FOUND":
+            return pd.DataFrame(), "TOKEN_NOT_FOUND"
+        return pd.DataFrame(), f"인증 에러: {e}"
     except Exception as e:
         return pd.DataFrame(), f"Google 인증 실패: {type(e).__name__}: {e}"
 
@@ -200,6 +200,21 @@ def load_data() -> tuple:
     df["월"] = df["날짜"].dt.to_period("M").astype(str)
 
     return df, None
+
+def save_utm_to_sheet(row_data: list):
+    """새로 생성된 UTM 데이터를 구글 시트 맨 아래에 추가합니다."""
+    creds = get_credentials()
+    service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    
+    body = {"values": [row_data]}
+    
+    service.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"'{SHEET_NAME}'!A:A",
+        valueInputOption="USER_ENTERED",
+        insertDataOption="INSERT_ROWS",
+        body=body
+    ).execute()
 
 
 def _parse_currency(val) -> int:
@@ -482,13 +497,12 @@ def render_dashboard(df: pd.DataFrame):
         fig.update_traces(textfont_size=13)
         st.plotly_chart(fig, use_container_width=True)
 
-# ── Row 5: Full Data Table ──
+    # ── Row 5: Full Data Table (수정 완료!) ──
     st.markdown('<div class="section-hd">전체 UTM 데이터</div>', unsafe_allow_html=True)
     table_cols = [
         "생성일", "생성자", "utm_source", "utm_medium", "utm_campaign",
         "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목",
     ]
-    # 👇 [table_cols]의 위치를 정렬(sort_values) 뒤로 옮겼습니다!
     display_df = fdf.sort_values("날짜", ascending=False)[table_cols].reset_index(drop=True)
     st.dataframe(display_df, use_container_width=True, hide_index=True, height=420)
 
@@ -539,11 +553,46 @@ def render_generator():
         st.markdown('<div class="section-hd">생성된 URL</div>', unsafe_allow_html=True)
         st.code(full_url, language=None)
 
-        # 파라미터 요약 테이블
-        param_df = pd.DataFrame(
-            [{"파라미터": k, "값": v} for k, v in params.items()]
-        )
-        st.dataframe(param_df, use_container_width=True, hide_index=True)
+        # ── 구글 시트 저장 기능 ──
+        st.markdown('<div class="section-hd">💾 구글 시트 저장</div>', unsafe_allow_html=True)
+        
+        sc1, sc2 = st.columns([3, 1])
+        with sc1:
+            creator = st.text_input("생성자 이름", placeholder="예: 홍길동 (담당자명)")
+        with sc2:
+            st.write("") # 줄맞춤을 위한 빈 공간
+            st.write("")
+            save_clicked = st.button("시트에 추가하기", use_container_width=True)
+
+        if save_clicked:
+            if not creator:
+                st.warning("생성자 이름을 먼저 입력해주세요!")
+            else:
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # 시트 A~L열 구조에 맞춰 데이터를 만듭니다. 수치 지표는 0으로 기본 세팅합니다.
+                row_data = [
+                    now_str,      # A: 생성일
+                    creator,      # B: 생성자
+                    source,       # C: utm_source
+                    medium,       # D: utm_medium
+                    campaign,     # E: utm_campaign
+                    content,      # F: utm_content
+                    0,            # G: UV
+                    0,            # H: 결제완료
+                    "0%",         # I: CVR
+                    0,            # J: 결제금액
+                    term if term else "", # K: 결제품목 (term 데이터가 있다면 이 위치에 저장)
+                    full_url      # L: 전체 URL
+                ]
+                
+                with st.spinner("구글 시트에 데이터를 전송하는 중..."):
+                    try:
+                        save_utm_to_sheet(row_data)
+                        st.success("✅ 구글 시트에 성공적으로 저장되었습니다! 대시보드에 즉시 반영됩니다.")
+                        st.cache_data.clear() # 캐시를 초기화해서 대시보드에 바로 보이도록 함
+                    except Exception as e:
+                        st.error(f"저장 중 오류가 발생했습니다: {e}")
+
     else:
         st.info("모든 필수 항목(URL, source, medium, campaign, content)을 입력하면 URL이 생성됩니다.")
 
@@ -551,16 +600,12 @@ def render_generator():
 # ─────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────
-# ─────────────────────────────────────────
-# Main
-# ─────────────────────────────────────────
 def main():
     df, err = load_data()
 
-    if df.empty:
+    if df.empty and err:
         st.error("데이터를 불러올 수 없습니다.")
         if err == "TOKEN_NOT_FOUND":
-            # 문제의 원인이었던 """ 를 제거하고 일반 문자열로 변경했습니다!
             st.markdown(
                 "**Streamlit Cloud 배포 시**: Settings > Secrets에 아래 내용을 추가하세요.\n\n"
                 "```\n"
@@ -570,7 +615,7 @@ def main():
                 "1. `token.json` 파일을 이 프로젝트 폴더에 복사\n"
                 "2. `GOOGLE_TOKEN_JSON` 환경변수 설정"
             )
-        elif err:
+        else:
             st.warning(f"상세 오류: {err}")
         return
 
@@ -592,7 +637,8 @@ def main():
     tab_dash, tab_gen = st.tabs(["📊 Performance", "🔗 UTM Generator"])
 
     with tab_dash:
-        render_dashboard(df)
+        if not df.empty:
+            render_dashboard(df)
 
     with tab_gen:
         render_generator()
