@@ -457,7 +457,9 @@ def render_dashboard(df, data_source="redash"):
         fig.add_trace(go.Bar(x=grp["g"], y=[grp["UV"].max()*1.2]*len(grp), marker_color="rgba(0,0,0,0)", hoverinfo="skip", showlegend=False), secondary_y=False)
         colors = ["#C5A774" if x not in st.session_state.selected_points else "#E5D4B0" for x in grp["g"]]
         fig.add_trace(go.Bar(x=grp["g"], y=grp["UV"], name="UV", marker_color=colors, text=grp["UV"], textposition="outside"), secondary_y=False)
-        fig.add_trace(go.Scatter(x=grp["g"], y=grp["pay"], name="전환", mode="lines+markers", line=dict(color="#FF3333", width=3), marker=dict(size=12, color="#FF3333", line=dict(color="white", width=2))), secondary_y=True)
+        # 전환 0건인 날짜는 None 처리 → 선 보간 방지 (실제 전환 있는 구간만 선 연결)
+        pay_display = grp["pay"].apply(lambda v: v if v > 0 else None)
+        fig.add_trace(go.Scatter(x=grp["g"], y=pay_display, name="전환", mode="lines+markers", connectgaps=False, line=dict(color="#FF3333", width=3), marker=dict(size=12, color="#FF3333", line=dict(color="white", width=2))), secondary_y=True)
 
         for _, r in grp.iterrows():
             if r["pay"] > 0:
