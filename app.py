@@ -116,9 +116,8 @@ def fmt_currency(v):
 # ─────────────────────────────────────────
 def render_dashboard(df):
     with st.expander("🔍 상세 필터", expanded=True):
-        # 🚨 필터 검색 가능 안내 문구 추가
         st.markdown("<span style='font-size: 13px; color: #aaa;'>💡 <b>Tip:</b> 드롭다운 클릭 후 키보드로 <b>직접 텍스트를 입력</b>하여 빠르게 검색할 수 있습니다.</span>", unsafe_allow_html=True)
-        st.write("") # 간격
+        st.write("") 
         
         v_dates = df["날짜_dt"].dropna()
         min_d, max_d = (v_dates.min().date(), v_dates.max().date()) if not v_dates.empty else (datetime.now().date(), datetime.now().date())
@@ -127,7 +126,6 @@ def render_dashboard(df):
         st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
         
         c1, c2, c3, c4 = st.columns(4)
-        # 🚨 라벨에 돋보기 아이콘 추가하여 검색 기능 시각화
         sel_src = c1.selectbox("Source 🔍", ["전체"] + sorted(df["utm_source"].unique()))
         sel_med = c2.selectbox("Medium 🔍", ["전체"] + sorted(df["utm_medium"].unique()))
         sel_cam = c3.selectbox("Campaign 🔍", ["전체"] + sorted(df["utm_campaign"].unique()))
@@ -154,7 +152,6 @@ def render_dashboard(df):
     
     with c1:
         st.markdown('<div class="section-hd">UV & 전환 트렌드</div>', unsafe_allow_html=True)
-        # 🚨 전환값 클릭 유도 시각적 배지 추가
         st.markdown('<div class="click-hint-badge">👆 차트의 빨간색 <b>전환값(n건)을 클릭</b>하면 상세 내용 확인이 가능합니다.</div>', unsafe_allow_html=True)
         
         t_unit = st.radio("단위", ["일간", "주간", "월간"], index=0, horizontal=True, label_visibility="collapsed")
@@ -254,33 +251,69 @@ def render_dashboard(df):
     )
 
 # ─────────────────────────────────────────
-# UTM Generator
+# UTM Generator (🚨 생성자 입력란 추가 및 B열 연동)
 # ─────────────────────────────────────────
 def render_gen():
     st.markdown('<div class="section-hd">UTM 링크 생성기</div>', unsafe_allow_html=True)
     with st.container(border=True):
         col1, col2 = st.columns(2)
-        url = col1.text_input("랜딩 URL", "https://thesoo.co/")
-        src = col1.selectbox("Source", ["kakao", "naver", "instagram", "facebook", "blog", "직접입력"])
-        if src=="직접입력": src = col1.text_input("Source 입력")
-        med = col2.selectbox("Medium", ["text", "image", "banner", "video", "instant", "직접입력"])
-        if med=="직접입력": med = col2.text_input("Medium 입력")
-        cam = col2.text_input("Campaign", placeholder="예: 2602_seolevent")
-        cnt = st.text_input("Content", placeholder="예: 260226_kakao")
+        
+        with col1:
+            # 🚨 생성자 입력란 추가
+            creator = st.text_input("생성자 👤", placeholder="예: 홍길동")
+            url = st.text_input("랜딩 URL", "https://thesoo.co/")
+            src = st.selectbox("Source", ["kakao", "naver", "instagram", "facebook", "blog", "직접입력"])
+            if src=="직접입력": src = st.text_input("Source 입력")
+            
+        with col2:
+            cam = st.text_input("Campaign", placeholder="예: 2602_seolevent")
+            cnt = st.text_input("Content", placeholder="예: 260226_kakao")
+            med = st.selectbox("Medium", ["text", "image", "banner", "video", "instant", "직접입력"])
+            if med=="직접입력": med = st.text_input("Medium 입력")
+            
         memo = st.text_input("메모 (시트 전용)")
         
         if url and src and med and cam and cnt:
             params = {"utm_source": src, "utm_medium": med, "utm_campaign": cam, "utm_content": cnt}
             final_url = f"{url}{'&' if '?' in url else '?'}{urlencode(params)}"
             st.code(final_url, language=None)
+            
             if st.button("🚀 구글 시트에 추가", use_container_width=True):
-                row = [datetime.now().strftime("%Y. %m. %d"), "담당자", url, src, med, cam, cnt, 0, 0, "0%", "-", "-", final_url, "", memo]
-                try:
-                    creds = get_credentials()
-                    service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-                    service.spreadsheets().values().append(spreadsheetId=SPREADSHEET_ID, range=f"'{SHEET_NAME}'!A:A", valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS", body={"values": [row]}).execute()
-                    st.success("데이터가 성공적으로 전송되었습니다."); st.cache_data.clear()
-                except Exception as e: st.error(f"저장 실패: {e}")
+                # 🚨 생성자 입력 유효성 검사
+                if not creator:
+                    st.warning("⚠️ '생성자' 항목을 먼저 입력해주세요!")
+                else:
+                    # 🚨 시트 구조(A~O, 총 15열)에 맞게 B열(인덱스 1)에 creator 변수 삽입
+                    row = [
+                        datetime.now().strftime("%Y. %m. %d"), # A: 생성일
+                        creator,                               # B: 생성자 🚨
+                        url,                                   # C: 랜딩 URL
+                        src,                                   # D: Source
+                        med,                                   # E: Medium
+                        cam,                                   # F: Campaign
+                        cnt,                                   # G: Content
+                        0,                                     # H: UV
+                        0,                                     # I: 결제완료
+                        "0%",                                  # J: CVR
+                        "-",                                   # K: 결제금액
+                        "-",                                   # L: 결제품목
+                        final_url,                             # M: 완성 URL
+                        "",                                    # N: bit
+                        memo                                   # O: 메모
+                    ]
+                    try:
+                        creds = get_credentials()
+                        service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+                        service.spreadsheets().values().append(
+                            spreadsheetId=SPREADSHEET_ID, 
+                            range=f"'{SHEET_NAME}'!A:A", 
+                            valueInputOption="USER_ENTERED", 
+                            insertDataOption="INSERT_ROWS", 
+                            body={"values": [row]}
+                        ).execute()
+                        st.success("✅ 구글 시트에 성공적으로 전송되었습니다."); st.cache_data.clear()
+                    except Exception as e: 
+                        st.error(f"저장 실패: {e}")
 
 def main():
     df, err = load_data()
