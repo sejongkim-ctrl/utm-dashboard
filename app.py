@@ -322,20 +322,17 @@ def render_dashboard(df: pd.DataFrame):
         if not weekly.empty:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             
-            # 🚨 1. UV 바 차트: 텍스트를 막대 안쪽으로(inside), 0값 숨김
             fig.add_trace(
                 go.Bar(
                     x=weekly["주차_표시"], y=weekly["UV"], name="UV",
                     marker_color="#C5A774", opacity=0.85,
                     text=[f"{v:,}" if v > 0 else "" for v in weekly["UV"]],
-                    textposition="inside",
-                    insidetextanchor="end", # 막대 안쪽 꼭대기에 정렬
-                    textfont=dict(size=11, color="white"),
+                    textposition="outside", # 막대 위에 표시
+                    textfont=dict(size=11, color="#ccc"),
                 ),
                 secondary_y=False,
             )
             
-            # 🚨 2. 전환 꺾은선 차트: 밝은 빨간색, 흰색 테두리 마커, 0값 숨김, '건' 추가
             fig.add_trace(
                 go.Scatter(
                     x=weekly["주차_표시"], y=weekly["전환"], name="전환",
@@ -349,17 +346,16 @@ def render_dashboard(df: pd.DataFrame):
                 secondary_y=True,
             )
             
-            # 🚨 3. 레이아웃: 통합 호버(hovermode) 추가
             fig.update_layout(
                 PLOTLY_LAYOUT,
                 height=370,
                 legend=dict(orientation="h", y=1.15, x=0),
                 xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
                 bargap=0.3,
-                hovermode="x unified", # 마우스를 올리면 두 지표가 한 번에 툴팁으로 보임
+                hovermode="x unified", 
             )
             
-            # 🚨 4. 천장 여백 확보 (y축 범위 동적 조절)
+            # 🚨 핵심 조치: Y축의 천장 여백(Scale) 비율을 완전히 다르게 주어 겹침 방지!
             max_uv = weekly["UV"].max()
             max_conv = weekly["전환"].max()
             
@@ -368,10 +364,12 @@ def render_dashboard(df: pd.DataFrame):
                 gridcolor="rgba(255,255,255,0.04)", showgrid=True,
                 range=[0, max_uv * 1.25 if max_uv > 0 else 10]
             )
+            # 🚨 우측 Y축(전환)의 범위를 2.2배로 뻥튀기하여 꺾은선이 차트의 아랫부분으로 깔리게 함
             fig.update_yaxes(
                 title_text="전환", secondary_y=True,
                 gridcolor="rgba(255,255,255,0.04)", showgrid=False,
-                range=[0, max_conv * 1.35 if max_conv > 0 else 10]
+                range=[0, max_conv * 2.2 if max_conv > 0 else 10],
+                tickformat="d" # 🚨 소수점(1.5, 2.5 등)을 없애고 정수 단위로만 표시
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -411,7 +409,6 @@ def render_dashboard(df: pd.DataFrame):
 
         if not camp.empty:
             fig = go.Figure()
-            # 🚨 여기도 UV 0값 숨김 처리 적용
             fig.add_trace(go.Bar(
                 y=camp["utm_campaign"], x=camp["UV"], name="UV",
                 orientation="h", marker_color="#C5A774", opacity=0.85,
@@ -446,7 +443,7 @@ def render_dashboard(df: pd.DataFrame):
         if not med.empty:
             fig = px.pie(
                 med, values="UV", names="utm_medium",
-                color_discrete_sequence=CHART_PALETTE[2:], hole=0.45,
+                color_discrete_sequence=CHART_PALETTE, hole=0.45,
             )
             fig.update_layout(PLOTLY_LAYOUT, height=370, showlegend=True,
                               legend=dict(font=dict(size=11)))
