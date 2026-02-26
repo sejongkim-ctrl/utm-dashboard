@@ -23,7 +23,7 @@ from datetime import datetime
 # ─────────────────────────────────────────
 SPREADSHEET_ID = "1MTS1Aa8NmAbcvnpPs78LsQmAImSLbSHwEp5QbKE7JbI"
 SHEET_NAME = "UTM생성기"
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 CHART_PALETTE = [
     "#C5A774", "#891C21", "#4ECDC4", "#45B7D1",
