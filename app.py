@@ -91,9 +91,18 @@ def load_data():
         values = res.get("values", [])
         if len(values) < 2: return pd.DataFrame(), "No Data"
         df = pd.DataFrame(values[1:], columns=values[0])
-        for col in ["UV", "결제완료"]: df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", ""), errors="coerce").fillna(0).astype(int)
+        # 누락 컬럼 기본값 생성 (시트 구조 변경/빈 헤더 대응)
+        for col in ["UV", "결제완료"]:
+            if col not in df.columns: df[col] = 0
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", ""), errors="coerce").fillna(0).astype(int)
+        if "CVR" not in df.columns: df["CVR"] = "0%"
         df["CVR_num"] = df["CVR"].astype(str).str.replace("%", "").apply(lambda x: float(x) if x.strip() not in ["-", "", "0%"] else 0.0)
+        if "결제금액" not in df.columns: df["결제금액"] = "0"
         df["결제금액_num"] = df["결제금액"].astype(str).str.replace("₩", "").str.replace(",", "").apply(lambda x: int(x) if str(x).isdigit() else 0)
+        if "생성일" not in df.columns: df["생성일"] = ""
+        if "생성자" not in df.columns: df["생성자"] = "미등록"
+        for col in ["utm_source", "utm_medium", "utm_campaign", "utm_content"]:
+            if col not in df.columns: df[col] = ""
         df["생성일_dt"] = pd.to_datetime(df["생성일"], format="mixed", dayfirst=False, errors="coerce")
         def parse_date(r):
             c = str(r.get("utm_content", ""))
