@@ -104,20 +104,24 @@ st.markdown("""<style>
 # Data Loading
 # ─────────────────────────────────────────
 @st.cache_data(ttl=300)
-def load_data() -> pd.DataFrame:
-    """Google Sheets에서 UTM 데이터 로드 (5분 캐시)"""
+def load_data() -> tuple:
+    """Google Sheets에서 UTM 데이터 로드 (5분 캐시).
+    Returns: (DataFrame, error_message_or_None)
+    """
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
     from googleapiclient.discovery import build
 
-    # 토큰 로드: st.secrets → 환경변수 → 로컬 파일 → utm-tracker-updater
+    # 토큰 로드: st.secrets → 환경변수 → 로컬 파일
     token_json = None
 
     # 1) Streamlit Cloud secrets (배포 환경)
     try:
-        token_json = st.secrets.get("GOOGLE_TOKEN_JSON")
-    except Exception:
+        token_json = st.secrets["GOOGLE_TOKEN_JSON"]
+    except (KeyError, FileNotFoundError):
         pass
+    except Exception as e:
+        return pd.DataFrame(), f"st.secrets 읽기 실패: {type(e).__name__}: {e}"
 
     # 2) 환경변수
     if not token_json:
@@ -135,24 +139,34 @@ def load_data() -> pd.DataFrame:
                 break
 
     if not token_json:
-        return pd.DataFrame()
+        return pd.DataFrame(), "TOKEN_NOT_FOUND"
 
-    token_data = json.loads(token_json)
-    creds = Credentials.from_authorized_user_info(token_data, SCOPES)
-    if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+    try:
+        token_data = json.loads(token_json)
+    except json.JSONDecodeError as e:
+        return pd.DataFrame(), f"토큰 JSON 파싱 실패: {e}"
 
-    service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-    result = (
-        service.spreadsheets()
-        .values()
-        .get(spreadsheetId=SPREADSHEET_ID, range=f"'{SHEET_NAME}'!A1:L")
-        .execute()
-    )
+    try:
+        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+    except Exception as e:
+        return pd.DataFrame(), f"Google 인증 실패: {type(e).__name__}: {e}"
+
+    try:
+        service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        result = (
+            service.spreadsheets()
+            .values()
+            .get(spreadsheetId=SPREADSHEET_ID, range=f"'{SHEET_NAME}'!A1:L")
+            .execute()
+        )
+    except Exception as e:
+        return pd.DataFrame(), f"Google Sheets API 실패: {type(e).__name__}: {e}"
 
     values = result.get("values", [])
     if len(values) < 2:
-        return pd.DataFrame()
+        return pd.DataFrame(), "시트에 데이터가 없습니다."
 
     headers = values[0]
     rows = []
@@ -185,7 +199,7 @@ def load_data() -> pd.DataFrame:
     )
     df["월"] = df["날짜"].dt.to_period("M").astype(str)
 
-    return df
+    return df, None
 
 
 def _parse_currency(val) -> int:
@@ -537,16 +551,23 @@ def render_generator():
 # Main
 # ─────────────────────────────────────────
 def main():
-    df = load_data()
+    df, err = load_data()
 
     if df.empty:
         st.error("데이터를 불러올 수 없습니다.")
-        st.markdown("""
-        **인증 설정 방법 (택1)**:
-        1. `token.json` 파일을 이 프로젝트 폴더에 복사
-        2. `GOOGLE_TOKEN_JSON` 환경변수 설정
-        3. `~/utm-tracker-updater/token.json` 경로에 토큰 파일 배치
-        """)
+        if err == "TOKEN_NOT_FOUND":
+            st.markdown("""
+**Streamlit Cloud 배포 시**: Settings > Secrets에 아래 내용을 추가하세요.
+```
+GOOGLE_TOKEN_JSON = '{ ... token.json 내용 ... }'
+```
+
+**로컬 실행 시 (택1)**:
+1. `token.json` 파일을 이 프로젝트 폴더에 복사
+2. `GOOGLE_TOKEN_JSON` 환경변수 설정
+            """)
+        elif err:
+            st.warning(f"상세 오류: {err}")
         return
 
     # Header
