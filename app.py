@@ -131,15 +131,19 @@ def _read_sheet_tab(service, sheet_name: str):
 
 
 def _parse_date_from_content(row):
-    """utm_content에서 날짜 추출 (예: 250226_kakao → 2025-02-26)."""
+    """utm_content에서 날짜 추출 (예: 250226_kakao → 2025-02-26).
+    4자리(MMDD) 패턴: 최초유입 연도 기준으로 파싱 (과거 UTM 오파싱 방지).
+    """
     c = str(row.get("utm_content", ""))
     m6 = re.search(r"(\d{6})", c)
     if m6:
         return pd.to_datetime(m6.group(1), format="%y%m%d", errors="coerce")
     m4 = re.search(r"(\d{4})", c)
     if m4:
+        base_dt = row.get("생성일_dt")
+        year = base_dt.year if pd.notna(base_dt) else datetime.now().year
         return pd.to_datetime(
-            f"{datetime.now().year}{m4.group(1)}", format="%Y%m%d", errors="coerce"
+            f"{year}{m4.group(1)}", format="%Y%m%d", errors="coerce"
         )
     return row.get("생성일_dt")
 
@@ -294,6 +298,12 @@ def render_dashboard(df, data_source):
         label_visibility="collapsed",
     )
 
+    # 시간 단위 변경 시 선택 초기화 (일간↔주간↔월간 g값 불일치 방지)
+    if st.session_state.get("_prev_t_unit") != t_unit:
+        st.session_state["_prev_t_unit"] = t_unit
+        st.session_state.selected_points = []
+        st.session_state["_chart_sel_xs"] = []
+
     chart_df = fdf.copy()
     if t_unit == "일간":
         chart_df["g"] = chart_df["날짜_dt"].dt.strftime("%y.%m.%d")
@@ -384,13 +394,24 @@ def render_dashboard(df, data_source):
     sel = st.plotly_chart(
         fig, use_container_width=True, on_select="rerun", key="main_chart"
     )
-    if sel and "selection" in sel and sel["selection"]["points"]:
-        clicked_x = sel["selection"]["points"][0]["x"]
-        if clicked_x in st.session_state.selected_points:
-            st.session_state.selected_points.remove(clicked_x)
-        else:
-            st.session_state.selected_points.append(clicked_x)
+
+    # ── 선택 상태 관리 (이전 선택과 비교하여 중복 토글 방지) ──
+    cur_sel_xs = sorted(
+        set(p.get("x") for p in sel.get("selection", {}).get("points", []))
+    ) if sel else []
+    prev_sel_xs = st.session_state.get("_chart_sel_xs", [])
+
+    if cur_sel_xs and cur_sel_xs != prev_sel_xs:
+        st.session_state["_chart_sel_xs"] = cur_sel_xs
+        for px in cur_sel_xs:
+            if px not in prev_sel_xs:
+                if px in st.session_state.selected_points:
+                    st.session_state.selected_points.remove(px)
+                else:
+                    st.session_state.selected_points.append(px)
         st.rerun()
+    elif not cur_sel_xs and prev_sel_xs:
+        st.session_state["_chart_sel_xs"] = []
 
     # ── Drill-down 상세 ──
     if st.session_state.selected_points:
@@ -405,6 +426,7 @@ def render_dashboard(df, data_source):
         with tag_cols[0]:
             if st.button("선택 초기화", key="clear_btn"):
                 st.session_state.selected_points = []
+                st.session_state["_chart_sel_xs"] = []
                 st.rerun()
         with tag_cols[1]:
             tags_html = "".join(
@@ -415,16 +437,30 @@ def render_dashboard(df, data_source):
             )
             st.markdown(tags_html, unsafe_allow_html=True)
 
-        detail_df = chart_df[
+        # 선택 기간의 집계 KPI (grp 기반 — 차트와 동일한 데이터 소스)
+        sel_grp = grp[grp["g"].isin(st.session_state.selected_points)]
+        if not sel_grp.empty:
+            s_uv = int(sel_grp["UV"].sum())
+            s_pay = int(sel_grp["pay"].sum())
+            s_cvr = (s_pay / s_uv * 100) if s_uv > 0 else 0
+            sk1, sk2, sk3 = st.columns(3)
+            sk1.metric("기간 UV", f"{s_uv:,}")
+            sk2.metric("기간 전환", f"{s_pay:,}건")
+            sk3.metric("기간 CVR", f"{s_cvr:.2f}%")
+
+        # 해당 기간 전체 UTM (전환 여부 무관) — 전환 있는 행 우선 정렬
+        period_df = chart_df[
             chart_df["g"].isin(st.session_state.selected_points)
-            & (chart_df["결제완료"] > 0)
         ].sort_values("결제완료", ascending=False)
 
-        if not detail_df.empty:
+        # 전환 있는 UTM만 별도 추출 (차트용)
+        conv_df = period_df[period_df["결제완료"] > 0]
+
+        if not conv_df.empty:
             sc1, sc2 = st.columns(2)
             with sc1:
                 fig_cvr = px.bar(
-                    detail_df, x="utm_content", y="CVR_num",
+                    conv_df, x="utm_content", y="CVR_num",
                     title="CVR (%)", color_discrete_sequence=["#C5A774"],
                     text_auto=".1f",
                 )
@@ -432,14 +468,17 @@ def render_dashboard(df, data_source):
                 st.plotly_chart(fig_cvr, use_container_width=True)
             with sc2:
                 fig_rev = px.bar(
-                    detail_df, x="utm_content", y="결제금액_num",
+                    conv_df, x="utm_content", y="결제금액_num",
                     title="매출액 (원)", color_discrete_sequence=["#891C21"],
                 )
                 fig_rev.update_layout(**PLOTLY_LAYOUT)
                 st.plotly_chart(fig_rev, use_container_width=True)
 
-            display_detail = detail_df.copy()
-            display_detail["날짜"] = display_detail["날짜_dt"].dt.strftime("%Y-%m-%d")
+        if not period_df.empty:
+            display_detail = period_df.copy()
+            display_detail["날짜"] = display_detail["날짜_dt"].dt.strftime(
+                "%Y-%m-%d"
+            )
             detail_cols = [
                 "날짜", "utm_content", "utm_campaign", "utm_source",
                 "UV", "결제완료", "CVR", "결제금액", "결제품목",
@@ -450,7 +489,7 @@ def render_dashboard(df, data_source):
                 use_container_width=True, hide_index=True,
             )
         else:
-            st.info("선택한 날짜에 전환 데이터가 없습니다.")
+            st.info("선택한 기간에 UTM 데이터가 없습니다.")
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ── 캠페인 + 미디엄 ──
