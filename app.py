@@ -25,18 +25,23 @@ PLOTLY_LAYOUT = dict(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)"
 st.set_page_config(page_title="UTM Performance Dashboard", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
 # ─────────────────────────────────────────
-# Custom CSS
+# Custom CSS (상단 텍스트 잘림 방지 및 스타일)
 # ─────────────────────────────────────────
 st.markdown("""<style>
 #MainMenu, footer {visibility: hidden;}
-.block-container {padding-top: 1.5rem; padding-bottom: 1rem;}
+/* 상단 텍스트 잘림 방지를 위해 여백 조정 (기존 1.5rem -> 3rem) */
+.block-container {padding-top: 3rem; padding-bottom: 1rem;}
+
 @keyframes fadeSlideUp { 0% { opacity: 0; transform: translateY(15px); } 100% { opacity: 1; transform: translateY(0); } }
 .stPlotlyChart, .stDataFrame, [data-testid="stMetric"], .section-hd, .drilldown-box { animation: fadeSlideUp 0.5s ease-out forwards; }
+
 [data-testid="stMetric"] { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border: 1px solid rgba(197, 167, 116, 0.2); border-radius: 10px; padding: 16px 20px; text-align: center; }
 [data-testid="stMetricLabel"] { font-size: 12px !important; color: #888 !important; text-transform: uppercase; justify-content: center !important; }
 [data-testid="stMetricValue"] { font-size: 26px !important; font-weight: 700 !important; justify-content: center !important; }
+
 .section-hd { font-size: 15px; font-weight: 600; color: #C5A774; margin: 20px 0 8px; padding-bottom: 6px; border-bottom: 1px solid rgba(197, 167, 116, 0.15); }
 .stDataFrame {font-size: 13px;}
+
 .date-tag {
     display: inline-block;
     background-color: rgba(197, 167, 116, 0.2);
@@ -113,8 +118,8 @@ def render_dashboard(df):
         fdf = fdf[(fdf["날짜_dt"].dt.date >= date_range[0]) & (fdf["날짜_dt"].dt.date <= date_range[1])]
     if sel_src != "전체": fdf = fdf[fdf["utm_source"] == sel_src]
     if sel_med != "전체": fdf = fdf[fdf["utm_medium"] == sel_medium]
-    if sel_campaign := sel_cam != "전체": fdf = fdf[fdf["utm_campaign"] == sel_cam]
-    if sel_creator := sel_cre != "전체": fdf = fdf[fdf["생성자"] == sel_cre]
+    if sel_cam != "전체": fdf = fdf[fdf["utm_campaign"] == sel_cam]
+    if sel_cre != "전체": fdf = fdf[fdf["생성자"] == sel_cre]
 
     k1, k2, k3, k4, k5 = st.columns(5)
     uv, pay = fdf["UV"].sum(), fdf["결제완료"].sum()
@@ -198,16 +203,18 @@ def render_dashboard(df):
     all_disp = fdf.copy()
     all_disp["날짜"] = all_disp["날짜_dt"].dt.strftime("%Y-%m-%d")
     
-    # 🚨 수정됨: hidden 인자 대신 column_order를 사용하여 기본 노출 컬럼 제어 (버전 호환성 해결)
+    # 🚨 요청하신 대로 디폴트 제외 컬럼 업데이트: 생성자, 완성 URL, 메모 + 소스, 미디엄, 캠페인
+    # 사용자가 직접 체크해서 볼 수 있는 전체 리스트
     all_cols = ["날짜", "생성자", "랜딩 URL", "utm_source", "utm_medium", "utm_campaign", "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목", "완성 URL", "메모"]
-    default_visible_cols = ["날짜", "랜딩 URL", "utm_source", "utm_medium", "utm_campaign", "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목"]
+    # 첫 화면에 보일 리스트
+    default_visible_cols = ["날짜", "랜딩 URL", "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목"]
     
     st.dataframe(
         all_disp.sort_values("날짜", ascending=False), 
         use_container_width=True, 
         hide_index=True, 
         height=420,
-        column_order=default_visible_cols # 이 리스트에 포함된 열만 기본으로 노출됩니다.
+        column_order=default_visible_cols # 기본 노출 및 순서 제어
     )
 
 # ─────────────────────────────────────────
