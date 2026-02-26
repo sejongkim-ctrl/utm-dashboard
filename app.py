@@ -158,7 +158,6 @@ def load_data() -> tuple:
         result = (
             service.spreadsheets()
             .values()
-            # 🚨 시트 열 개수에 맞춰 A1:O 로 범위를 넓혔습니다.
             .get(spreadsheetId=SPREADSHEET_ID, range=f"'{SHEET_NAME}'!A1:O")
             .execute()
         )
@@ -500,9 +499,10 @@ def render_dashboard(df: pd.DataFrame):
 
     # ── Row 5: Full Data Table ──
     st.markdown('<div class="section-hd">전체 UTM 데이터</div>', unsafe_allow_html=True)
+    # 🚨 여기에 '메모' 열을 추가하여 표에서도 볼 수 있게 했습니다!
     table_cols = [
         "생성일", "생성자", "랜딩 URL", "utm_source", "utm_medium", "utm_campaign",
-        "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목", "완성 URL"
+        "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목", "완성 URL", "메모"
     ]
     display_df = fdf.sort_values("날짜", ascending=False)[table_cols].reset_index(drop=True)
     st.dataframe(display_df, use_container_width=True, hide_index=True, height=420)
@@ -535,9 +535,11 @@ def render_generator():
     with c2:
         campaign = st.text_input("utm_campaign", placeholder="예: 2602_seolevent")
         content = st.text_input("utm_content", placeholder="예: 260226_kakao")
-        term = st.text_input("메모 / 검색 키워드 (선택)", placeholder="검색 키워드 또는 메모 입력")
+        # 🚨 순수 시트 기록용 '메모' 항목을 추가했습니다 (UTM 파라미터에는 들어가지 않음)
+        sheet_memo = st.text_input("메모 (선택)", placeholder="시트에 기록될 간단한 메모를 남겨주세요")
 
     if base_url and source and medium and campaign and content:
+        # UTM URL에는 필수 파라미터들만 깔끔하게 포함시킵니다
         params = {
             "utm_source": source,
             "utm_medium": medium,
@@ -569,7 +571,7 @@ def render_generator():
             else:
                 now_str = datetime.now().strftime("%Y. %m. %d")
                 
-                # 🚨 시트의 15개 열 구조에 완벽하게 맞춘 데이터 배열입니다!
+                # 🚨 15개 열 구조 (O열에 '메모' 값이 저장되도록 매핑)
                 row_data = [
                     now_str,      # A: 생성일
                     creator,      # B: 생성자
@@ -585,7 +587,7 @@ def render_generator():
                     "-",          # L: 결제품목
                     full_url,     # M: 완성 URL
                     "",           # N: bit (빈칸)
-                    term if term else "" # O: 메모 (term으로 입력받은 값 저장)
+                    sheet_memo    # O: 메모 (입력한 메모값 저장)
                 ]
                 
                 with st.spinner("구글 시트에 데이터를 전송하는 중..."):
