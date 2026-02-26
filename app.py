@@ -76,7 +76,7 @@ def load_data():
         df = pd.DataFrame(values[1:], columns=values[0])
         for col in ["UV", "결제완료"]: df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", ""), errors="coerce").fillna(0).astype(int)
         df["CVR_num"] = df["CVR"].astype(str).str.replace("%", "").apply(lambda x: float(x) if x.strip() not in ["-", "", "0%"] else 0.0)
-        df["결제금액_num"] = df["결제금액"].astype(str).str.replace("₩", "").str.replace(",", "").apply(lambda x: int(x) if x.isdigit() else 0)
+        df["결제금액_num"] = df["결제금액"].astype(str).str.replace("₩", "").str.replace(",", "").apply(lambda x: int(x) if str(x).isdigit() else 0)
         df["생성일_dt"] = pd.to_datetime(df["생성일"], format="mixed", dayfirst=False, errors="coerce")
         def parse_date(r):
             c = str(r.get("utm_content", ""))
@@ -109,11 +109,12 @@ def render_dashboard(df):
         sel_cre = c4.selectbox("생성자", ["전체"] + sorted(df["생성자"].unique()))
 
     fdf = df.copy()
-    if len(date_range) == 2: fdf = fdf[(fdf["날짜_dt"].dt.date >= date_range[0]) & (fdf["날짜_dt"].dt.date <= date_range[1])]
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        fdf = fdf[(fdf["날짜_dt"].dt.date >= date_range[0]) & (fdf["날짜_dt"].dt.date <= date_range[1])]
     if sel_src != "전체": fdf = fdf[fdf["utm_source"] == sel_src]
     if sel_med != "전체": fdf = fdf[fdf["utm_medium"] == sel_medium]
-    if sel_cam != "전체": fdf = fdf[fdf["utm_campaign"] == sel_cam]
-    if sel_cre != "전체": fdf = fdf[fdf["생성자"] == sel_cre]
+    if sel_campaign := sel_cam != "전체": fdf = fdf[fdf["utm_campaign"] == sel_cam]
+    if sel_creator := sel_cre != "전체": fdf = fdf[fdf["생성자"] == sel_cre]
 
     k1, k2, k3, k4, k5 = st.columns(5)
     uv, pay = fdf["UV"].sum(), fdf["결제완료"].sum()
@@ -197,20 +198,16 @@ def render_dashboard(df):
     all_disp = fdf.copy()
     all_disp["날짜"] = all_disp["날짜_dt"].dt.strftime("%Y-%m-%d")
     
-    # 🚨 컬럼 노출 설정 수정: 생성자, 완성 URL, 메모는 기본 숨김 처리
-    disp_cols = ["날짜", "생성자", "랜딩 URL", "utm_source", "utm_medium", "utm_campaign", "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목", "완성 URL", "메모"]
+    # 🚨 수정됨: hidden 인자 대신 column_order를 사용하여 기본 노출 컬럼 제어 (버전 호환성 해결)
+    all_cols = ["날짜", "생성자", "랜딩 URL", "utm_source", "utm_medium", "utm_campaign", "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목", "완성 URL", "메모"]
+    default_visible_cols = ["날짜", "랜딩 URL", "utm_source", "utm_medium", "utm_campaign", "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목"]
     
-    # st.column_config 를 사용하여 특정 컬럼 기본 숨김
     st.dataframe(
-        all_disp.sort_values("날짜", ascending=False)[disp_cols], 
+        all_disp.sort_values("날짜", ascending=False), 
         use_container_width=True, 
         hide_index=True, 
         height=420,
-        column_config={
-            "생성자": st.column_config.Column(required=False, width=None, help=None, hidden=True),
-            "완성 URL": st.column_config.Column(required=False, width=None, help=None, hidden=True),
-            "메모": st.column_config.Column(required=False, width=None, help=None, hidden=True),
-        }
+        column_order=default_visible_cols # 이 리스트에 포함된 열만 기본으로 노출됩니다.
     )
 
 # ─────────────────────────────────────────
