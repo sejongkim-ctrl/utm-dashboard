@@ -401,8 +401,9 @@ def render_dashboard(df, data_source="redash"):
         st.markdown("<span style='font-size: 13px; color: #aaa;'>💡 <b>Tip:</b> 드롭다운 클릭 후 키보드로 <b>직접 텍스트를 입력</b>하여 빠르게 검색할 수 있습니다.</span>", unsafe_allow_html=True)
         st.write("")
 
-        v_dates = df["날짜_dt"].dropna()
-        min_d, max_d = (v_dates.min().date(), v_dates.max().date()) if not v_dates.empty else (datetime.now().date(), datetime.now().date())
+        # 🚨 조회 기간 기본값 수정 (최근 3개월 ~ 오늘)
+        max_d = datetime.now().date()
+        min_d = (pd.to_datetime(max_d) - pd.DateOffset(months=3)).date()
         date_range = st.date_input("조회 기간", value=(min_d, max_d))
 
         st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
