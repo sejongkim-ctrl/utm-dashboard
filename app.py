@@ -29,8 +29,7 @@ REDASH_DATA_SOURCE_ID = 3
 JOB_POLL_INTERVAL = 3
 JOB_TIMEOUT = 180
 
-# Daily UTM — 방문일(visit_date) 기준 일별 UV/전환 집계
-# 기존 SQL은 utm_content별 1행(first_visit 기준)이라 기간 필터 시 데이터 누락 발생
+# Daily UTM — 방문일 기준 일별 UV/전환 집계 (1d/3d/7d 기여기간 동시 계산)
 DAILY_UTM_SQL = """
 WITH utm_visits AS (
   SELECT
@@ -73,11 +72,15 @@ daily_metrics AS (
     u.utm_content,
     u.visit_date,
     COUNT(DISTINCT u.anonymousid) AS unique_visitors,
-    COUNT(DISTINCT CASE WHEN p.anonymousid IS NOT NULL THEN u.anonymousid END) AS purchase_complete
+    COUNT(DISTINCT CASE WHEN p.anonymousid IS NOT NULL
+      AND p.purchase_ts <= DATEADD(day, 1, u.visit_ts) THEN u.anonymousid END) AS purchase_1d,
+    COUNT(DISTINCT CASE WHEN p.anonymousid IS NOT NULL
+      AND p.purchase_ts <= DATEADD(day, 3, u.visit_ts) THEN u.anonymousid END) AS purchase_3d,
+    COUNT(DISTINCT CASE WHEN p.anonymousid IS NOT NULL THEN u.anonymousid END) AS purchase_7d
   FROM utm_visits u
   LEFT JOIN purchases p ON u.anonymousid = p.anonymousid
     AND p.purchase_ts >= u.visit_ts
-    AND p.purchase_ts <= DATEADD(day, 3, u.visit_ts)
+    AND p.purchase_ts <= DATEADD(day, 7, u.visit_ts)
   WHERE u.utm_content IS NOT NULL AND u.utm_content != ''
   GROUP BY u.utm_content, u.visit_date
 )
@@ -88,14 +91,18 @@ SELECT
   d.utm_content,
   d.visit_date,
   d.unique_visitors,
-  d.purchase_complete,
-  ROUND(d.purchase_complete::DECIMAL / NULLIF(d.unique_visitors, 0) * 100, 2) AS cvr_pct
+  d.purchase_1d,
+  d.purchase_3d,
+  d.purchase_7d,
+  ROUND(d.purchase_1d::DECIMAL / NULLIF(d.unique_visitors, 0) * 100, 2) AS cvr_1d,
+  ROUND(d.purchase_3d::DECIMAL / NULLIF(d.unique_visitors, 0) * 100, 2) AS cvr_3d,
+  ROUND(d.purchase_7d::DECIMAL / NULLIF(d.unique_visitors, 0) * 100, 2) AS cvr_7d
 FROM daily_metrics d
 JOIN params p ON d.utm_content = p.utm_content AND p.rn = 1
 ORDER BY d.visit_date DESC, d.unique_visitors DESC
 """.strip()
 
-# Revenue + Products SQL (utm_content별 매출/품목 상세 — 전체기간)
+# Revenue + Products SQL (utm_content별 매출/품목 — 1d/3d/7d 조건부 집계)
 REVENUE_PRODUCTS_SQL = """
 WITH utm_visits AS (
   SELECT DISTINCT anonymousid,
@@ -116,16 +123,25 @@ purchases AS (
   FROM soo_segment.segment_log WHERE event = 'purchaseFinView' AND properties IS NOT NULL
 ),
 utm_purchases AS (
-  SELECT DISTINCT u.utm_content, p.purchase_amount, p.product_name, p.messageid
+  SELECT u.utm_content, p.purchase_amount, p.product_name, p.messageid,
+    MAX(CASE WHEN p.purchase_ts <= DATEADD(day, 1, u.visit_ts) THEN 1 ELSE 0 END) AS within_1d,
+    MAX(CASE WHEN p.purchase_ts <= DATEADD(day, 3, u.visit_ts) THEN 1 ELSE 0 END) AS within_3d
   FROM utm_visits u JOIN purchases p ON u.anonymousid = p.anonymousid
     AND p.purchase_ts >= u.visit_ts
-    AND p.purchase_ts <= DATEADD(day, 3, u.visit_ts)
+    AND p.purchase_ts <= DATEADD(day, 7, u.visit_ts)
   WHERE u.utm_content IS NOT NULL
+  GROUP BY u.utm_content, p.purchase_amount, p.product_name, p.messageid
 )
-SELECT utm_content, product_name, COUNT(*) as cnt, SUM(purchase_amount) as revenue
+SELECT utm_content, product_name,
+  SUM(CASE WHEN within_1d = 1 THEN 1 ELSE 0 END) AS cnt_1d,
+  SUM(CASE WHEN within_3d = 1 THEN 1 ELSE 0 END) AS cnt_3d,
+  COUNT(*) AS cnt_7d,
+  SUM(CASE WHEN within_1d = 1 THEN purchase_amount ELSE 0 END) AS revenue_1d,
+  SUM(CASE WHEN within_3d = 1 THEN purchase_amount ELSE 0 END) AS revenue_3d,
+  SUM(purchase_amount) AS revenue_7d
 FROM utm_purchases
 GROUP BY utm_content, product_name
-ORDER BY utm_content, cnt DESC
+ORDER BY utm_content, cnt_7d DESC
 """.strip()
 
 # Cache (Redash 결과를 CSV로 저장 → Streamlit Cloud에서 읽기)
@@ -271,14 +287,19 @@ def clean_product_name(raw: str) -> str:
     name = name.replace(" 수壽", "")
     return " ".join(name.split())
 
-def aggregate_products(revenue_rows: list, utm_content: str) -> tuple:
+def aggregate_products(revenue_rows: list, utm_content: str, days: int = 3) -> tuple:
+    """특정 utm_content의 매출/품목 집계. days=1,3,7 기여기간 지원."""
+    cnt_col = f"cnt_{days}d"
+    rev_col = f"revenue_{days}d"
     product_counts = defaultdict(int)
     total_revenue = 0
     for row in revenue_rows:
         if row["utm_content"] != utm_content:
             continue
-        cnt = row["cnt"]
-        rev = row.get("revenue") or 0
+        cnt = row.get(cnt_col, row.get("cnt", 0)) or 0
+        rev = row.get(rev_col, row.get("revenue", 0)) or 0
+        if cnt == 0:
+            continue
         total_revenue += rev
         for p in str(row.get("product_name", "")).split(","):
             cleaned = clean_product_name(p)
@@ -307,27 +328,29 @@ def get_credentials():
 def _build_dataframe(daily_rows, rev_rows):
     """Redash 일별 데이터 → 대시보드용 DataFrame (1행 = utm_content × visit_date)"""
     df = pd.DataFrame(daily_rows)
-    df = df.rename(columns={
-        "unique_visitors": "UV",
-        "purchase_complete": "결제완료",
-        "cvr_pct": "CVR_num",
-    })
+    df = df.rename(columns={"unique_visitors": "UV"})
     for col in ["utm_source", "utm_medium", "utm_campaign", "utm_content"]:
         if col in df.columns:
             df[col] = df[col].apply(lambda x: unquote_plus(str(x)) if pd.notna(x) else "")
     df["UV"] = pd.to_numeric(df["UV"], errors="coerce").fillna(0).astype(int)
-    df["결제완료"] = pd.to_numeric(df["결제완료"], errors="coerce").fillna(0).astype(int)
-    df["CVR_num"] = pd.to_numeric(df["CVR_num"], errors="coerce").fillna(0.0)
-    df["CVR"] = df["CVR_num"].apply(lambda x: f"{x:.2f}%")
 
-    # Revenue: utm_content별 전체기간 합산 (일별 분리 불가)
-    rev_map = {}
+    # 3개 기여기간별 전환/CVR
+    for d in [1, 3, 7]:
+        pcol = f"purchase_{d}d"
+        ccol = f"cvr_{d}d"
+        df[pcol] = pd.to_numeric(df.get(pcol, 0), errors="coerce").fillna(0).astype(int)
+        df[ccol] = pd.to_numeric(df.get(ccol, 0.0), errors="coerce").fillna(0.0)
+
+    # Revenue: utm_content별 전체기간, 3개 기여기간별 매출/품목
+    rev_map = {d: {} for d in [1, 3, 7]}
     for content in df["utm_content"].unique():
-        total_rev, products = aggregate_products(rev_rows, content)
-        rev_map[content] = (total_rev, products)
-    df["결제금액_num"] = df["utm_content"].map(lambda x: rev_map.get(x, (0, "-"))[0])
-    df["결제금액"] = df["결제금액_num"].apply(lambda x: f"₩{x:,}" if x > 0 else "-")
-    df["결제품목"] = df["utm_content"].map(lambda x: rev_map.get(x, (0, "-"))[1])
+        for d in [1, 3, 7]:
+            total_rev, products = aggregate_products(rev_rows, content, days=d)
+            rev_map[d][content] = (total_rev, products)
+
+    for d in [1, 3, 7]:
+        df[f"결제금액_{d}d"] = df["utm_content"].map(lambda x, dd=d: rev_map[dd].get(x, (0, "-"))[0])
+        df[f"결제품목_{d}d"] = df["utm_content"].map(lambda x, dd=d: rev_map[dd].get(x, (0, "-"))[1])
 
     df["날짜_dt"] = pd.to_datetime(df["visit_date"], errors="coerce")
     return df
@@ -367,14 +390,31 @@ def load_data():
     if os.path.exists(CACHE_PATH):
         try:
             df = pd.read_csv(CACHE_PATH)
-            # 구버전 캐시(first_visit 기반) 감지
             if "visit_date" not in df.columns and "first_visit" in df.columns:
                 return pd.DataFrame(), "캐시가 구버전입니다. 로컬에서 먼저 실행하여 캐시를 갱신해주세요.", None
             df["UV"] = pd.to_numeric(df["UV"], errors="coerce").fillna(0).astype(int)
-            df["결제완료"] = pd.to_numeric(df["결제완료"], errors="coerce").fillna(0).astype(int)
-            df["CVR_num"] = pd.to_numeric(df["CVR_num"], errors="coerce").fillna(0.0)
-            df["CVR"] = df["CVR_num"].apply(lambda x: f"{x:.2f}%")
-            df["결제금액_num"] = pd.to_numeric(df["결제금액_num"], errors="coerce").fillna(0).astype(int)
+            # 멀티윈도우 컬럼 파싱
+            for d in [1, 3, 7]:
+                p = f"purchase_{d}d"
+                c = f"cvr_{d}d"
+                if p in df.columns:
+                    df[p] = pd.to_numeric(df[p], errors="coerce").fillna(0).astype(int)
+                    df[c] = pd.to_numeric(df.get(c, 0.0), errors="coerce").fillna(0.0)
+                rc = f"결제금액_{d}d"
+                if rc in df.columns:
+                    df[rc] = pd.to_numeric(df[rc], errors="coerce").fillna(0).astype(int)
+            # 구버전 CSV 호환 (purchase_1d 없으면 기존 컬럼 매핑)
+            if "purchase_3d" not in df.columns and "결제완료" in df.columns:
+                df["purchase_3d"] = pd.to_numeric(df["결제완료"], errors="coerce").fillna(0).astype(int)
+                df["cvr_3d"] = pd.to_numeric(df.get("CVR_num", 0.0), errors="coerce").fillna(0.0)
+                df["purchase_1d"] = df["purchase_3d"]
+                df["purchase_7d"] = df["purchase_3d"]
+                df["cvr_1d"] = df["cvr_3d"]
+                df["cvr_7d"] = df["cvr_3d"]
+                if "결제금액_num" in df.columns:
+                    for d in [1, 3, 7]:
+                        df[f"결제금액_{d}d"] = pd.to_numeric(df["결제금액_num"], errors="coerce").fillna(0).astype(int)
+                        df[f"결제품목_{d}d"] = df.get("결제품목", "-")
             df["날짜_dt"] = pd.to_datetime(df["visit_date"], errors="coerce")
             mtime = datetime.fromtimestamp(os.path.getmtime(CACHE_PATH)).strftime("%m/%d %H:%M")
             return df, None, f"cache · {mtime}"
@@ -394,14 +434,22 @@ def fmt_currency(v):
 # Dashboard Logic
 # ─────────────────────────────────────────
 def render_dashboard(df, data_source="redash"):
-    badge_text = "Redash Direct · 일별 집계 · 3일 기여" if data_source == "redash" else f"Cached Data ({data_source})"
-    st.markdown(f'<span class="data-source-badge">{badge_text}</span>', unsafe_allow_html=True)
+    # 기여기간에 따라 사용할 컬럼명 결정
+    attr_options = {"+1일": 1, "+3일": 3, "+7일": 7}
+    attr_label = st.radio("기여기간", list(attr_options.keys()), index=1, horizontal=True, label_visibility="collapsed")
+    attr_days = attr_options[attr_label]
+    pcol = f"purchase_{attr_days}d"  # 전환 컬럼
+    ccol = f"cvr_{attr_days}d"       # CVR 컬럼
+    rcol = f"결제금액_{attr_days}d"  # 매출 컬럼
+    prcol = f"결제품목_{attr_days}d" # 품목 컬럼
+
+    badge_src = "Redash Direct" if data_source == "redash" else f"Cache ({data_source})"
+    st.markdown(f'<span class="data-source-badge">{badge_src} · 일별 집계 · {attr_days}일 기여</span>', unsafe_allow_html=True)
 
     with st.expander("🔍 상세 필터", expanded=True):
         st.markdown("<span style='font-size: 13px; color: #aaa;'>💡 <b>Tip:</b> 드롭다운 클릭 후 키보드로 <b>직접 텍스트를 입력</b>하여 빠르게 검색할 수 있습니다.</span>", unsafe_allow_html=True)
         st.write("")
 
-        # 🚨 조회 기간 기본값 수정 (최근 3개월 ~ 오늘)
         max_d = datetime.now().date()
         min_d = (pd.to_datetime(max_d) - pd.DateOffset(months=3)).date()
         date_range = st.date_input("조회 기간", value=(min_d, max_d))
@@ -421,12 +469,12 @@ def render_dashboard(df, data_source="redash"):
     if sel_cam != "전체": fdf = fdf[fdf["utm_campaign"] == sel_cam]
 
     k1, k2, k3, k4, k5 = st.columns(5)
-    uv, pay = fdf["UV"].sum(), fdf["결제완료"].sum()
+    uv = fdf["UV"].sum()
+    pay = fdf[pcol].sum() if pcol in fdf.columns else 0
     k1.metric("Total UV", f"{uv:,}")
     k2.metric("Total 결제", f"{pay:,}")
     k3.metric("Avg CVR", f"{(pay/uv*100 if uv>0 else 0):.2f}%")
-    # 매출: utm_content별 전체기간 매출의 합 (중복 제거)
-    rev_by_content = fdf.drop_duplicates(subset=["utm_content"])["결제금액_num"].sum()
+    rev_by_content = fdf.drop_duplicates(subset=["utm_content"])[rcol].sum() if rcol in fdf.columns else 0
     k4.metric("Total 매출", fmt_currency(rev_by_content))
     k5.metric("Active UTM", f"{fdf['utm_content'].nunique():,}")
 
@@ -444,7 +492,7 @@ def render_dashboard(df, data_source="redash"):
         elif t_unit == "월간": chart_df["g"] = chart_df["날짜_dt"].dt.to_period("M").dt.start_time.dt.strftime("%y년 %m월")
         else: chart_df["g"] = chart_df["날짜_dt"].dt.to_period("W").dt.start_time.dt.strftime("%y.%m.%d") + "(주)"
 
-        grp = chart_df.groupby("g").agg(UV=("UV","sum"), pay=("결제완료","sum")).reset_index().sort_values("g")
+        grp = chart_df.groupby("g").agg(UV=("UV","sum"), pay=(pcol,"sum")).reset_index().sort_values("g")
 
         if "selected_points" not in st.session_state: st.session_state.selected_points = []
 
@@ -516,10 +564,21 @@ def render_dashboard(df, data_source="redash"):
             if not detail_raw.empty:
                 detail_df = detail_raw.groupby(["utm_content", "utm_campaign", "utm_source", "utm_medium"]).agg(
                     UV=("UV", "sum"),
-                    결제완료=("결제완료", "sum"),
+                    결제완료=(pcol, "sum"),
                 ).reset_index()
                 detail_df["CVR_num"] = (detail_df["결제완료"] / detail_df["UV"].replace(0, float('nan')) * 100).fillna(0).round(2)
                 detail_df["CVR"] = detail_df["CVR_num"].apply(lambda x: f"{x:.2f}%")
+
+                # 결제금액/결제품목 join (utm_content 기준, 중복 제거 후 매핑)
+                if rcol in fdf.columns and prcol in fdf.columns:
+                    rev_lookup = fdf.drop_duplicates(subset=["utm_content"]).set_index("utm_content")[[rcol, prcol]]
+                    detail_df = detail_df.join(rev_lookup, on="utm_content")
+                    detail_df["결제금액"] = detail_df[rcol].apply(lambda x: f"₩{int(x):,}" if pd.notna(x) and x > 0 else "-")
+                    detail_df["결제품목"] = detail_df[prcol].fillna("-")
+                else:
+                    detail_df["결제금액"] = "-"
+                    detail_df["결제품목"] = "-"
+
                 detail_df = detail_df.sort_values("결제완료", ascending=False)
 
                 conv_df = detail_df[detail_df["결제완료"] > 0]
@@ -539,7 +598,7 @@ def render_dashboard(df, data_source="redash"):
 
                 st.write("")
                 st.dataframe(
-                    detail_df[["utm_content", "utm_campaign", "utm_source", "UV", "결제완료", "CVR"]].reset_index(drop=True),
+                    detail_df[["utm_content", "utm_campaign", "utm_source", "UV", "결제완료", "CVR", "결제금액", "결제품목"]].reset_index(drop=True),
                     use_container_width=True, hide_index=True
                 )
             else: st.info("선택한 날짜에 데이터가 없습니다.")
@@ -548,7 +607,7 @@ def render_dashboard(df, data_source="redash"):
     c_sub1, c_sub2 = st.columns([2, 1])
     with c_sub1:
         st.markdown('<div class="section-hd">캠페인 성과</div>', unsafe_allow_html=True)
-        cp = fdf.groupby("utm_campaign").agg(UV=("UV","sum"), pay=("결제완료","sum")).reset_index().sort_values("UV")
+        cp = fdf.groupby("utm_campaign").agg(UV=("UV","sum"), pay=(pcol,"sum")).reset_index().sort_values("UV")
         fig_cp = go.Figure()
         fig_cp.add_trace(go.Bar(y=cp["utm_campaign"], x=cp["UV"], orientation="h", marker_color="#C5A774", name="UV"))
         fig_cp.update_layout(PLOTLY_LAYOUT, height=max(300, len(cp)*30), margin=dict(l=120, r=15, t=10, b=25))
@@ -560,19 +619,28 @@ def render_dashboard(df, data_source="redash"):
 
     # 전체 UTM 요약 테이블 (일별 데이터 → utm_content별 집계)
     st.markdown('<div class="section-hd">전체 UTM 데이터</div>', unsafe_allow_html=True)
-    summary = fdf.groupby(["utm_content", "utm_source", "utm_medium", "utm_campaign"]).agg(
-        최초유입=("날짜_dt", "min"),
-        최근유입=("날짜_dt", "max"),
-        UV=("UV", "sum"),
-        결제완료=("결제완료", "sum"),
-        결제금액_num=("결제금액_num", "first"),
-        결제금액=("결제금액", "first"),
-        결제품목=("결제품목", "first"),
-    ).reset_index()
+    agg_dict = {
+        "최초유입": ("날짜_dt", "min"),
+        "최근유입": ("날짜_dt", "max"),
+        "UV": ("UV", "sum"),
+        "결제완료": (pcol, "sum"),
+    }
+    if rcol in fdf.columns:
+        agg_dict["결제금액_num"] = (rcol, "first")
+    if prcol in fdf.columns:
+        agg_dict["결제품목"] = (prcol, "first")
+
+    summary = fdf.groupby(["utm_content", "utm_source", "utm_medium", "utm_campaign"]).agg(**agg_dict).reset_index()
     summary["CVR_num"] = (summary["결제완료"] / summary["UV"].replace(0, float('nan')) * 100).fillna(0).round(2)
     summary["CVR"] = summary["CVR_num"].apply(lambda x: f"{x:.2f}%")
     summary["최초유입"] = summary["최초유입"].dt.strftime("%Y-%m-%d")
     summary["최근유입"] = summary["최근유입"].dt.strftime("%Y-%m-%d")
+    if "결제금액_num" in summary.columns:
+        summary["결제금액"] = summary["결제금액_num"].apply(lambda x: f"₩{int(x):,}" if pd.notna(x) and x > 0 else "-")
+    else:
+        summary["결제금액"] = "-"
+    if "결제품목" not in summary.columns:
+        summary["결제품목"] = "-"
 
     all_cols = ["최초유입", "최근유입", "utm_source", "utm_medium", "utm_campaign", "utm_content", "UV", "결제완료", "CVR", "결제금액", "결제품목"]
     default_visible_cols = ["최초유입", "utm_content", "utm_source", "UV", "결제완료", "CVR", "결제금액", "결제품목"]
