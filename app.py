@@ -161,7 +161,6 @@ st.markdown("""<style>
 #MainMenu, footer {visibility: hidden;}
 .block-container {padding-top: 2.5rem; padding-bottom: 2rem;}
 
-
 /* KPI 메트릭 카드 */
 [data-testid="stMetric"] {
     background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
@@ -437,7 +436,7 @@ def fmt_currency(v):
     return f"{v:,}원"
 
 # ─────────────────────────────────────────
-# Dashboard Logic
+# Dashboard Logic (수정된 함수)
 # ─────────────────────────────────────────
 def render_dashboard(df, data_source="redash"):
     # 기여기간에 따라 사용할 컬럼명 결정
@@ -538,7 +537,7 @@ def render_dashboard(df, data_source="redash"):
             st.plotly_chart(fig, use_container_width=True)
         else: st.info("데이터가 없습니다.")
 
-    # 전환 발생 날짜 multiselect (차트 아래 전체 너비)
+    # 전환 발생 날짜 multiselect
     available_dates = grp[grp["pay"] > 0]["g"].tolist()
     if available_dates:
         selected_dates = st.multiselect(
@@ -571,7 +570,7 @@ def render_dashboard(df, data_source="redash"):
                 sk2.metric("선택 전환", f"{sel_pay:,}")
                 sk3.metric("선택 CVR", f"{(sel_pay/sel_uv*100 if sel_uv>0 else 0):.2f}%")
 
-            # 선택된 날짜의 utm_content별 집계 (날짜별 매출 직접 사용)
+            # 선택된 날짜의 utm_content별 집계
             detail_raw = chart_df[chart_df["g"].isin(st.session_state.selected_points)]
             if not detail_raw.empty:
                 agg_detail = {"UV": ("UV", "sum"), "결제완료": (pcol, "sum")}
@@ -589,37 +588,32 @@ def render_dashboard(df, data_source="redash"):
                     lambda x: f"₩{int(x):,}" if pd.notna(x) and x > 0 else "-") if "결제금액_num" in detail_df.columns else "-"
                 detail_df["결제품목"] = detail_df.get("결제품목_raw", pd.Series(dtype=str)).fillna("-") if "결제품목_raw" in detail_df.columns else "-"
 
-                # 전환 있는 행만 필터 (차트 전환값과 정합성 일치)
-                conv_df = detail_df[detail_df["결제완료"] > 0].sort_values("결제완료", ascending=False)
+                # [수정 포인트] 전체 UTM을 전환수 내림차순 -> UV 내림차순으로 정렬 (숨김 처리 제거)
+                detail_df = detail_df.sort_values(by=["결제완료", "UV"], ascending=[False, False])
+                
+                # 차트용 데이터 (전환이 1건 이상인 것만)
+                conv_chart_df = detail_df[detail_df["결제완료"] > 0]
 
-                if not conv_df.empty:
+                if not conv_chart_df.empty:
                     st.write("")
                     sc1, sc2 = st.columns(2)
                     drill_margin = dict(l=60, r=15, t=40, b=40)
                     with sc1:
-                        fig_conv = px.bar(conv_df, x="utm_content", y="결제완료", title="전환 건수", color_discrete_sequence=["#FF3333"], text_auto="d")
+                        fig_conv = px.bar(conv_chart_df, x="utm_content", y="결제완료", title="전환 건수", color_discrete_sequence=["#FF3333"], text_auto="d")
                         fig_conv.update_layout(PLOTLY_LAYOUT, margin=drill_margin, height=320, xaxis_tickangle=-30)
                         st.plotly_chart(fig_conv, use_container_width=True)
                     with sc2:
-                        fig_cvr = px.bar(conv_df, x="utm_content", y="CVR_num", title="CVR (%)", color_discrete_sequence=["#C5A774"], text_auto=".2f")
+                        fig_cvr = px.bar(conv_chart_df, x="utm_content", y="CVR_num", title="CVR (%)", color_discrete_sequence=["#C5A774"], text_auto=".2f")
                         fig_cvr.update_layout(PLOTLY_LAYOUT, margin=drill_margin, height=320, xaxis_tickangle=-30)
                         fig_cvr.update_yaxes(ticksuffix="%")
                         st.plotly_chart(fig_cvr, use_container_width=True)
 
                 st.write("")
+                st.markdown('<div class="section-hd" style="margin-top:5px;">전체 UTM 상세 성과 (전환 없는 UTM 포함)</div>', unsafe_allow_html=True)
                 st.dataframe(
-                    conv_df[["utm_content", "utm_campaign", "utm_source", "UV", "결제완료", "CVR", "결제금액", "결제품목"]].reset_index(drop=True),
+                    detail_df[["utm_content", "utm_campaign", "utm_source", "UV", "결제완료", "CVR", "결제금액", "결제품목"]].reset_index(drop=True),
                     use_container_width=True, hide_index=True
                 )
-
-                # 전환 없는 UTM도 확인할 수 있도록 접이식 섹션 제공
-                no_conv_df = detail_df[detail_df["결제완료"] == 0]
-                if not no_conv_df.empty:
-                    with st.expander(f"전환 없는 UTM ({len(no_conv_df)}건)", expanded=False):
-                        st.dataframe(
-                            no_conv_df[["utm_content", "utm_campaign", "utm_source", "UV"]].sort_values("UV", ascending=False).reset_index(drop=True),
-                            use_container_width=True, hide_index=True
-                        )
             else: st.info("선택한 날짜에 데이터가 없습니다.")
 
     st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
@@ -635,7 +629,6 @@ def render_dashboard(df, data_source="redash"):
         st.markdown('<div class="section-hd">미디엄 비중</div>', unsafe_allow_html=True)
         md = fdf.groupby("utm_medium")["UV"].sum().reset_index()
         st.plotly_chart(px.pie(md, values="UV", names="utm_medium", hole=0.4, color_discrete_sequence=CHART_PALETTE).update_layout(PLOTLY_LAYOUT), use_container_width=True)
-
 
 # ─────────────────────────────────────────
 # 전체 UTM 기록 (df 전체 데이터 기반)
