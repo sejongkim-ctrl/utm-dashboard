@@ -83,6 +83,22 @@ daily_metrics AS (
     AND p.purchase_ts <= DATEADD(day, 7, u.visit_ts)
   WHERE u.utm_content IS NOT NULL AND u.utm_content != ''
   GROUP BY u.utm_content, u.visit_date
+),
+content_totals AS (
+  SELECT
+    u.utm_content,
+    COUNT(DISTINCT u.anonymousid) AS total_uv,
+    COUNT(DISTINCT CASE WHEN p.anonymousid IS NOT NULL
+      AND p.purchase_ts <= DATEADD(day, 1, u.visit_ts) THEN u.anonymousid END) AS total_purchase_1d,
+    COUNT(DISTINCT CASE WHEN p.anonymousid IS NOT NULL
+      AND p.purchase_ts <= DATEADD(day, 3, u.visit_ts) THEN u.anonymousid END) AS total_purchase_3d,
+    COUNT(DISTINCT CASE WHEN p.anonymousid IS NOT NULL THEN u.anonymousid END) AS total_purchase_7d
+  FROM utm_visits u
+  LEFT JOIN purchases p ON u.anonymousid = p.anonymousid
+    AND p.purchase_ts >= u.visit_ts
+    AND p.purchase_ts <= DATEADD(day, 7, u.visit_ts)
+  WHERE u.utm_content IS NOT NULL AND u.utm_content != ''
+  GROUP BY u.utm_content
 )
 SELECT
   COALESCE(p.utm_source, 'unknown') AS utm_source,
@@ -96,9 +112,14 @@ SELECT
   d.purchase_7d,
   ROUND(d.purchase_1d::DECIMAL / NULLIF(d.unique_visitors, 0) * 100, 2) AS cvr_1d,
   ROUND(d.purchase_3d::DECIMAL / NULLIF(d.unique_visitors, 0) * 100, 2) AS cvr_3d,
-  ROUND(d.purchase_7d::DECIMAL / NULLIF(d.unique_visitors, 0) * 100, 2) AS cvr_7d
+  ROUND(d.purchase_7d::DECIMAL / NULLIF(d.unique_visitors, 0) * 100, 2) AS cvr_7d,
+  ct.total_uv,
+  ct.total_purchase_1d,
+  ct.total_purchase_3d,
+  ct.total_purchase_7d
 FROM daily_metrics d
 JOIN params p ON d.utm_content = p.utm_content AND p.rn = 1
+LEFT JOIN content_totals ct ON d.utm_content = ct.utm_content
 ORDER BY d.visit_date DESC, d.unique_visitors DESC
 """.strip()
 
@@ -324,6 +345,11 @@ def _build_dataframe(daily_rows, rev_rows):
         df[pcol] = pd.to_numeric(df.get(pcol, 0), errors="coerce").fillna(0).astype(int)
         df[ccol] = pd.to_numeric(df.get(ccol, 0.0), errors="coerce").fillna(0.0)
 
+    # utm_content 전체 UV/전환 (드릴다운용)
+    df["UV_total"] = pd.to_numeric(df.get("total_uv", 0), errors="coerce").fillna(0).astype(int)
+    for d in [1, 3, 7]:
+        df[f"purchase_total_{d}d"] = pd.to_numeric(df.get(f"total_purchase_{d}d", 0), errors="coerce").fillna(0).astype(int)
+
     # Revenue pre-index: (utm_content, visit_date)별 + utm_content 전체
     rev_by_cd = defaultdict(list)   # (content, date) → rows
     rev_by_c = defaultdict(list)    # content → rows
@@ -408,6 +434,17 @@ def load_data():
                 elif rc in df.columns:
                     df[rtc] = df[rc]
                     df[f"결제품목_total_{d}d"] = df.get(f"결제품목_{d}d", "-")
+                # purchase_total 하위호환
+                ptc = f"purchase_total_{d}d"
+                if ptc in df.columns:
+                    df[ptc] = pd.to_numeric(df[ptc], errors="coerce").fillna(0).astype(int)
+                elif p in df.columns:
+                    df[ptc] = df.groupby("utm_content")[p].transform("sum")
+            # UV_total 하위호환 (근사치: 날짜별 UV 합산)
+            if "UV_total" not in df.columns:
+                df["UV_total"] = df.groupby("utm_content")["UV"].transform("sum")
+            else:
+                df["UV_total"] = pd.to_numeric(df["UV_total"], errors="coerce").fillna(0).astype(int)
             # 구버전 CSV 호환 (purchase_1d 없으면 기존 컬럼 매핑)
             if "purchase_3d" not in df.columns and "결제완료" in df.columns:
                 df["purchase_3d"] = pd.to_numeric(df["결제완료"], errors="coerce").fillna(0).astype(int)
@@ -458,6 +495,7 @@ def render_dashboard(df, data_source="redash"):
     prcol = f"결제품목_{attr_days}d" # 날짜별 품목 컬럼
     rcol_total = f"결제금액_total_{attr_days}d"  # utm_content 전체 매출
     prcol_total = f"결제품목_total_{attr_days}d" # utm_content 전체 품목
+    pcol_total = f"purchase_total_{attr_days}d"  # utm_content 전체 전환
 
     badge_src = "Redash Direct" if data_source == "redash" else f"Cache ({data_source})"
     st.markdown(f'<span class="data-source-badge">{badge_src} · 일별 집계 · {attr_days}일 기여</span>', unsafe_allow_html=True)
@@ -570,23 +608,29 @@ def render_dashboard(df, data_source="redash"):
                 sk2.metric("선택 전환", f"{sel_pay:,}")
                 sk3.metric("선택 CVR", f"{(sel_pay/sel_uv*100 if sel_uv>0 else 0):.2f}%")
 
-            # 선택된 날짜의 utm_content별 집계
+            # 선택된 날짜의 utm_content별 전체 성과 (날짜는 필터링 기준, 지표는 전체 기간)
             detail_raw = chart_df[chart_df["g"].isin(st.session_state.selected_points)]
             if not detail_raw.empty:
-                agg_detail = {"UV": ("UV", "sum"), "결제완료": (pcol, "sum")}
-                if rcol in detail_raw.columns:
-                    agg_detail["결제금액_num"] = (rcol, "sum")
-                if prcol in detail_raw.columns:
-                    agg_detail["결제품목_raw"] = (prcol, lambda x: x[x != "-"].iloc[0] if (x != "-").any() else "-")
+                # utm_content별 1행으로 축소 → 전체 기간 지표 사용
+                detail_df = detail_raw.drop_duplicates(subset=["utm_content"]).copy()
+                _uv = "UV_total" if "UV_total" in detail_df.columns else "UV"
+                _pay = pcol_total if pcol_total in detail_df.columns else pcol
+                _rev = rcol_total if rcol_total in detail_df.columns else rcol
+                _prod = prcol_total if prcol_total in detail_df.columns else prcol
 
-                detail_df = detail_raw.groupby(["utm_content", "utm_campaign", "utm_source", "utm_medium"]).agg(
-                    **agg_detail
-                ).reset_index()
+                detail_df["UV"] = pd.to_numeric(detail_df[_uv], errors="coerce").fillna(0).astype(int)
+                detail_df["결제완료"] = pd.to_numeric(detail_df.get(_pay, 0), errors="coerce").fillna(0).astype(int)
                 detail_df["CVR_num"] = (detail_df["결제완료"] / detail_df["UV"].replace(0, float('nan')) * 100).fillna(0).round(2)
                 detail_df["CVR"] = detail_df["CVR_num"].apply(lambda x: f"{x:.2f}%")
-                detail_df["결제금액"] = detail_df.get("결제금액_num", pd.Series(dtype=float)).apply(
-                    lambda x: f"₩{int(x):,}" if pd.notna(x) and x > 0 else "-") if "결제금액_num" in detail_df.columns else "-"
-                detail_df["결제품목"] = detail_df.get("결제품목_raw", pd.Series(dtype=str)).fillna("-") if "결제품목_raw" in detail_df.columns else "-"
+                if _rev in detail_df.columns:
+                    detail_df["결제금액"] = pd.to_numeric(detail_df[_rev], errors="coerce").fillna(0).apply(
+                        lambda x: f"₩{int(x):,}" if x > 0 else "-")
+                else:
+                    detail_df["결제금액"] = "-"
+                if _prod in detail_df.columns:
+                    detail_df["결제품목"] = detail_df[_prod].fillna("-")
+                else:
+                    detail_df["결제품목"] = "-"
 
                 # [수정 포인트] 전체 UTM을 전환수 내림차순 -> UV 내림차순으로 정렬 (숨김 처리 제거)
                 detail_df = detail_df.sort_values(by=["결제완료", "UV"], ascending=[False, False])
