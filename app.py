@@ -608,31 +608,43 @@ def render_dashboard(df, data_source="redash"):
                 sk2.metric("선택 전환", f"{sel_pay:,}")
                 sk3.metric("선택 CVR", f"{(sel_pay/sel_uv*100 if sel_uv>0 else 0):.2f}%")
 
-            # 선택된 날짜의 utm_content별 전체 성과 (날짜는 필터링 기준, 지표는 전체 기간)
+            # 선택된 날짜의 utm_content별 집계 (선택 날짜 범위 내 성과만 표시)
             detail_raw = chart_df[chart_df["g"].isin(st.session_state.selected_points)]
             if not detail_raw.empty:
-                # utm_content별 1행으로 축소 → 전체 기간 지표 사용
-                detail_df = detail_raw.drop_duplicates(subset=["utm_content"]).copy()
-                _uv = "UV_total" if "UV_total" in detail_df.columns else "UV"
-                _pay = pcol_total if pcol_total in detail_df.columns else pcol
-                _rev = rcol_total if rcol_total in detail_df.columns else rcol
-                _prod = prcol_total if prcol_total in detail_df.columns else prcol
+                # 선택 날짜 내 utm_content별 UV/전환 합산
+                detail_df = detail_raw.groupby(
+                    ["utm_content", "utm_campaign", "utm_source", "utm_medium"]
+                ).agg(
+                    UV=("UV", "sum"),
+                    결제완료=(pcol, "sum"),
+                ).reset_index()
 
-                detail_df["UV"] = pd.to_numeric(detail_df[_uv], errors="coerce").fillna(0).astype(int)
-                detail_df["결제완료"] = pd.to_numeric(detail_df.get(_pay, 0), errors="coerce").fillna(0).astype(int)
                 detail_df["CVR_num"] = (detail_df["결제완료"] / detail_df["UV"].replace(0, float('nan')) * 100).fillna(0).round(2)
                 detail_df["CVR"] = detail_df["CVR_num"].apply(lambda x: f"{x:.2f}%")
-                if _rev in detail_df.columns:
-                    detail_df["결제금액"] = pd.to_numeric(detail_df[_rev], errors="coerce").fillna(0).apply(
+
+                # 결제금액: 선택 날짜 범위 매출 합산
+                if rcol in detail_raw.columns:
+                    rev_sum = detail_raw.groupby("utm_content")[rcol].apply(
+                        lambda x: pd.to_numeric(x, errors="coerce").sum()
+                    ).reset_index(name="결제금액_num")
+                    detail_df = detail_df.merge(rev_sum, on="utm_content", how="left")
+                    detail_df["결제금액"] = detail_df["결제금액_num"].fillna(0).apply(
                         lambda x: f"₩{int(x):,}" if x > 0 else "-")
                 else:
                     detail_df["결제금액"] = "-"
-                if _prod in detail_df.columns:
-                    detail_df["결제품목"] = detail_df[_prod].fillna("-")
+
+                # 결제품목: 선택 날짜의 품목 병합
+                if prcol in detail_raw.columns:
+                    prod_merge = detail_raw.groupby("utm_content")[prcol].apply(
+                        lambda x: ", ".join(sorted(set(
+                            str(v) for v in x if pd.notna(v) and str(v) not in ["-", "nan", ""]
+                        ))) or "-"
+                    ).reset_index(name="결제품목")
+                    detail_df = detail_df.merge(prod_merge, on="utm_content", how="left")
                 else:
                     detail_df["결제품목"] = "-"
 
-                # [수정 포인트] 전체 UTM을 전환수 내림차순 -> UV 내림차순으로 정렬 (숨김 처리 제거)
+                # 전환수 내림차순 → UV 내림차순 정렬
                 detail_df = detail_df.sort_values(by=["결제완료", "UV"], ascending=[False, False])
                 
                 # 차트용 데이터 (전환이 1건 이상인 것만)
@@ -653,7 +665,7 @@ def render_dashboard(df, data_source="redash"):
                         st.plotly_chart(fig_cvr, use_container_width=True)
 
                 st.write("")
-                st.markdown('<div class="section-hd" style="margin-top:5px;">전체 UTM 상세 성과 (전환 없는 UTM 포함)</div>', unsafe_allow_html=True)
+                st.markdown('<div class="section-hd" style="margin-top:5px;">선택 날짜 UTM 상세 성과 (전환 없는 UTM 포함)</div>', unsafe_allow_html=True)
                 st.dataframe(
                     detail_df[["utm_content", "utm_campaign", "utm_source", "UV", "결제완료", "CVR", "결제금액", "결제품목"]].reset_index(drop=True),
                     use_container_width=True, hide_index=True
