@@ -479,14 +479,25 @@ def render_dashboard(df, data_source="redash"):
     # 기여기간에 따라 사용할 컬럼명 결정
     attr_options = {"+1일": 1, "+3일": 3, "+7일": 7}
 
-    # 인라인 필터 (expander 제거 → 항상 노출)
+    # 인라인 필터
     f_attr, f_date = st.columns([1, 2.5])
     with f_attr:
         attr_label = st.radio("기여기간", list(attr_options.keys()), index=1, horizontal=True)
     with f_date:
-        data_min_d = df["날짜_dt"].min().date() if not df.empty else datetime.now().date()
-        data_max_d = df["날짜_dt"].max().date() if not df.empty else datetime.now().date()
-        date_range = st.date_input("조회 기간", value=(data_min_d, data_max_d))
+        # --- 수정된 부분 시작 ---
+        today = datetime.now().date()
+        one_month_ago = today - pd.DateOffset(months=1)
+        one_month_ago = one_month_ago.date()
+        
+        # 데이터의 실제 최소/최대값 확인
+        data_min_d = df["날짜_dt"].min().date() if not df.empty else today
+        data_max_d = df["날짜_dt"].max().date() if not df.empty else today
+        
+        # 기본 시작일을 (오늘-1달)과 (데이터 시작일) 중 더 늦은 날짜로 설정하여 오류 방지
+        default_start = max(one_month_ago, data_min_d)
+        
+        # 초기값을 직전 한달로 설정
+        date_range = st.date_input("조회 기간", value=(default_start, data_max_d))
 
     attr_days = attr_options[attr_label]
     pcol = f"purchase_{attr_days}d"  # 전환 컬럼
