@@ -1081,9 +1081,8 @@ def render_cdj():
         connector=dict(line=dict(color="#444", width=1)),
     ))
     fig_funnel.update_layout(
-        **PLOTLY_LAYOUT,
-        height=380,
-        margin=dict(l=10, r=10, t=10, b=10),
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#ccc"),
+        height=380, margin=dict(l=10, r=10, t=10, b=10),
     )
     st.plotly_chart(fig_funnel, use_container_width=True)
 
@@ -1126,7 +1125,7 @@ def render_cdj():
             orientation="h", marker_color=CHART_PALETTE[0],
             text=page_df["uv"].apply(lambda v: f"{v:,}"), textposition="outside",
         ))
-        fig_pages.update_layout(**PLOTLY_LAYOUT, height=340, margin=dict(l=120, r=60, t=10, b=10))
+        fig_pages.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#ccc"), height=340, margin=dict(l=120, r=60, t=10, b=10))
         st.plotly_chart(fig_pages, use_container_width=True)
 
     st.markdown("---")
@@ -1159,7 +1158,7 @@ def render_cdj():
             text=drop_df.apply(lambda r: f"{int(r['drop_users']):,}명 ({r['drop_pct']}%)", axis=1),
             textposition="outside",
         ))
-        fig_drop.update_layout(**PLOTLY_LAYOUT, height=360, margin=dict(l=160, r=80, t=10, b=10))
+        fig_drop.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#ccc"), height=360, margin=dict(l=160, r=80, t=10, b=10))
         st.plotly_chart(fig_drop, use_container_width=True)
 
     st.markdown("---")
@@ -1225,7 +1224,7 @@ def render_cdj():
                     orientation="h", marker_color=CHART_PALETTE[0],
                     text=b_sorted["비율"], textposition="outside",
                 ))
-                fig_b.update_layout(**PLOTLY_LAYOUT, height=340, margin=dict(l=140, r=60, t=10, b=10))
+                fig_b.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#ccc"), height=340, margin=dict(l=140, r=60, t=10, b=10))
                 st.plotly_chart(fig_b, use_container_width=True)
             with bc2:
                 st.dataframe(b_df, hide_index=True, use_container_width=True, height=340)
