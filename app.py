@@ -169,6 +169,7 @@ ORDER BY utm_content, visit_date DESC, cnt_7d DESC
 # Cache (Redash 결과를 CSV로 저장 → Streamlit Cloud에서 읽기)
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 CACHE_PATH = os.path.join(CACHE_DIR, "utm_performance.csv")
+CDJ_CACHE_PATH = os.path.join(CACHE_DIR, "cdj_funnel.json")
 
 CHART_PALETTE = ["#C5A774", "#891C21", "#4ECDC4", "#45B7D1", "#D4636C", "#96648C", "#7BC67E", "#E5D4B0", "#FF9F43", "#6B1419", "#A68B5B", "#FF6B6B"]
 PLOTLY_LAYOUT = dict(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#ccc"), margin=dict(l=55, r=15, t=10, b=25))
@@ -851,13 +852,405 @@ def render_gen():
                     except Exception as e:
                         st.error(f"저장 실패: {e}")
 
+# ─────────────────────────────────────────
+# CDJ 퍼널 분석 (Customer Decision Journey)
+# ─────────────────────────────────────────
+
+def _cdj_funnel_sql(days: int) -> str:
+    return f"""
+WITH user_stages AS (
+  SELECT anonymousid,
+    MAX(CASE WHEN context_page_url IS NOT NULL THEN 1 ELSE 0 END) AS s1_entry,
+    MAX(CASE WHEN context_page_url LIKE '%%/about/%%' OR context_page_url LIKE '%%/@%%'
+             OR context_page_url LIKE '%%/promotion/%%' OR context_page_url LIKE '%%/blog%%' THEN 1 ELSE 0 END) AS s2_explore,
+    MAX(CASE WHEN context_page_url LIKE '%%/products/%%' THEN 1 ELSE 0 END) AS s3_product,
+    MAX(CASE WHEN event = 'productDetailPrescriptionClick' OR event = 'productDetailCartClick' THEN 1 ELSE 0 END) AS s4_intent,
+    MAX(CASE WHEN context_page_url LIKE '%%/checkout/%%' AND context_page_url NOT LIKE '%%postprocess%%' THEN 1 ELSE 0 END) AS s5_checkout,
+    MAX(CASE WHEN event = 'purchaseFinView' THEN 1 ELSE 0 END) AS s6_purchase
+  FROM soo_segment.segment_log
+  WHERE ymd >= DATEADD(day, -{days}, CURRENT_DATE)
+  GROUP BY anonymousid
+)
+SELECT
+  COUNT(DISTINCT CASE WHEN s1_entry=1 THEN anonymousid END) AS s1_uv,
+  COUNT(DISTINCT CASE WHEN s2_explore=1 THEN anonymousid END) AS s2_uv,
+  COUNT(DISTINCT CASE WHEN s3_product=1 THEN anonymousid END) AS s3_uv,
+  COUNT(DISTINCT CASE WHEN s4_intent=1 THEN anonymousid END) AS s4_uv,
+  COUNT(DISTINCT CASE WHEN s5_checkout=1 THEN anonymousid END) AS s5_uv,
+  COUNT(DISTINCT CASE WHEN s6_purchase=1 THEN anonymousid END) AS s6_uv
+FROM user_stages
+"""
+
+def _cdj_events_sql(days: int) -> str:
+    return f"""
+SELECT event, COUNT(*) AS total_fires, COUNT(DISTINCT anonymousid) AS unique_users
+FROM soo_segment.segment_log
+WHERE ymd >= DATEADD(day, -{days}, CURRENT_DATE) AND event IS NOT NULL
+GROUP BY event ORDER BY unique_users DESC
+"""
+
+def _cdj_dropoff_sql(days: int) -> str:
+    return f"""
+WITH product_viewers AS (
+  SELECT DISTINCT anonymousid
+  FROM soo_segment.segment_log
+  WHERE ymd >= DATEADD(day, -{days}, CURRENT_DATE) AND context_page_url LIKE '%%/products/%%'
+),
+buyers AS (
+  SELECT DISTINCT anonymousid FROM soo_segment.segment_log
+  WHERE ymd >= DATEADD(day, -{days}, CURRENT_DATE) AND event = 'purchaseFinView'
+),
+non_buyers AS (
+  SELECT pv.anonymousid FROM product_viewers pv LEFT JOIN buyers b ON pv.anonymousid = b.anonymousid WHERE b.anonymousid IS NULL
+),
+last_ev AS (
+  SELECT s.anonymousid,
+    COALESCE(
+      LAST_VALUE(CASE WHEN s.event IS NOT NULL THEN s.event END IGNORE NULLS) OVER (PARTITION BY s.anonymousid ORDER BY s."timestamp" ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
+      CASE
+        WHEN MAX(s.context_page_url) OVER (PARTITION BY s.anonymousid ORDER BY s."timestamp" DESC ROWS BETWEEN CURRENT ROW AND CURRENT ROW) LIKE '%%/products/%%' THEN 'pv:product'
+        WHEN MAX(s.context_page_url) OVER (PARTITION BY s.anonymousid ORDER BY s."timestamp" DESC ROWS BETWEEN CURRENT ROW AND CURRENT ROW) LIKE '%%/@%%' THEN 'pv:clinic'
+        WHEN MAX(s.context_page_url) OVER (PARTITION BY s.anonymousid ORDER BY s."timestamp" DESC ROWS BETWEEN CURRENT ROW AND CURRENT ROW) LIKE '%%/about/%%' THEN 'pv:category'
+        WHEN MAX(s.context_page_url) OVER (PARTITION BY s.anonymousid ORDER BY s."timestamp" DESC ROWS BETWEEN CURRENT ROW AND CURRENT ROW) LIKE '%%/promotion/%%' THEN 'pv:promo'
+        WHEN MAX(s.context_page_url) OVER (PARTITION BY s.anonymousid ORDER BY s."timestamp" DESC ROWS BETWEEN CURRENT ROW AND CURRENT ROW) LIKE '%%/cart%%' THEN 'pv:cart'
+        WHEN MAX(s.context_page_url) OVER (PARTITION BY s.anonymousid ORDER BY s."timestamp" DESC ROWS BETWEEN CURRENT ROW AND CURRENT ROW) LIKE '%%/checkout/%%' THEN 'pv:checkout'
+        ELSE 'pv:other'
+      END
+    ) AS last_event,
+    ROW_NUMBER() OVER (PARTITION BY s.anonymousid ORDER BY s."timestamp" DESC) AS rn
+  FROM soo_segment.segment_log s
+  INNER JOIN non_buyers nb ON s.anonymousid = nb.anonymousid
+  WHERE s.ymd >= DATEADD(day, -{days}, CURRENT_DATE)
+)
+SELECT last_event, COUNT(*) AS drop_users,
+  ROUND(COUNT(*)::DECIMAL / (SELECT COUNT(*) FROM non_buyers) * 100, 2) AS drop_pct
+FROM last_ev WHERE rn = 1 GROUP BY last_event ORDER BY drop_users DESC LIMIT 15
+"""
+
+def _cdj_buyer_sql(days: int) -> str:
+    return f"""
+WITH buyers AS (
+  SELECT DISTINCT anonymousid FROM soo_segment.segment_log
+  WHERE ymd >= DATEADD(day, -{days}, CURRENT_DATE) AND event = 'purchaseFinView'
+),
+buyer_log AS (
+  SELECT s.anonymousid, s.event, s.context_page_url
+  FROM soo_segment.segment_log s INNER JOIN buyers b ON s.anonymousid = b.anonymousid
+  WHERE s.ymd >= DATEADD(day, -{days}, CURRENT_DATE)
+)
+SELECT
+  COUNT(DISTINCT anonymousid) AS total_buyers,
+  COUNT(DISTINCT CASE WHEN context_page_url LIKE '%%/@%%' THEN anonymousid END) AS via_clinic,
+  COUNT(DISTINCT CASE WHEN context_page_url LIKE '%%/about/%%' THEN anonymousid END) AS via_category,
+  COUNT(DISTINCT CASE WHEN context_page_url LIKE '%%/promotion/%%' THEN anonymousid END) AS via_promo,
+  COUNT(DISTINCT CASE WHEN event = 'productDetailPrescriptionClick' THEN anonymousid END) AS used_prescription,
+  COUNT(DISTINCT CASE WHEN event = 'productDetailCartClick' THEN anonymousid END) AS used_cart_click,
+  COUNT(DISTINCT CASE WHEN event = 'questionnaireClick' THEN anonymousid END) AS used_questionnaire,
+  COUNT(DISTINCT CASE WHEN event = 'clinicSelectCompleteClick' THEN anonymousid END) AS used_clinic_select,
+  COUNT(DISTINCT CASE WHEN event = 'consultButtonClick' THEN anonymousid END) AS used_consult,
+  COUNT(DISTINCT CASE WHEN event = 'signUpStart' THEN anonymousid END) AS used_signup,
+  COUNT(DISTINCT CASE WHEN context_page_url LIKE '%%/cart%%' THEN anonymousid END) AS saw_cart
+FROM buyer_log
+"""
+
+def _cdj_page_uv_sql(days: int) -> str:
+    return f"""
+SELECT
+  CASE
+    WHEN context_page_url LIKE '%%/products/%%' THEN 'product'
+    WHEN context_page_url LIKE '%%/about/%%' THEN 'category'
+    WHEN context_page_url LIKE '%%/@%%' THEN 'clinic'
+    WHEN context_page_url LIKE '%%/promotion/%%' THEN 'promo'
+    WHEN context_page_url LIKE '%%/blog%%' THEN 'blog'
+    WHEN context_page_url LIKE '%%/cart%%' THEN 'cart'
+    WHEN context_page_url LIKE '%%/checkout/%%' AND context_page_url LIKE '%%postprocess%%' THEN 'complete'
+    WHEN context_page_url LIKE '%%/checkout/%%' THEN 'checkout'
+    WHEN context_page_url LIKE '%%/brand%%' THEN 'brand'
+    ELSE 'other'
+  END AS page_type,
+  COUNT(DISTINCT anonymousid) AS uv, COUNT(*) AS pv
+FROM soo_segment.segment_log
+WHERE ymd >= DATEADD(day, -{days}, CURRENT_DATE) AND context_page_url IS NOT NULL
+GROUP BY 1 ORDER BY uv DESC
+"""
+
+@st.cache_data(ttl=1800, show_spinner="CDJ 퍼널 데이터 조회 중...")
+def load_cdj_data(days: int):
+    """CDJ 퍼널 데이터: Redash 직접 → JSON 캐시 폴백"""
+    api_key = os.getenv("REDASH_API_KEY")
+
+    if api_key:
+        try:
+            client = RedashClient(REDASH_BASE_URL, api_key)
+            funnel = client.execute_adhoc_query(REDASH_DATA_SOURCE_ID, _cdj_funnel_sql(days))
+            events = client.execute_adhoc_query(REDASH_DATA_SOURCE_ID, _cdj_events_sql(days))
+            dropoff = client.execute_adhoc_query(REDASH_DATA_SOURCE_ID, _cdj_dropoff_sql(days))
+            buyers = client.execute_adhoc_query(REDASH_DATA_SOURCE_ID, _cdj_buyer_sql(days))
+            pages = client.execute_adhoc_query(REDASH_DATA_SOURCE_ID, _cdj_page_uv_sql(days))
+
+            result = {"funnel": funnel, "events": events, "dropoff": dropoff, "buyers": buyers, "pages": pages, "days": days, "updated": datetime.now().strftime("%Y-%m-%d %H:%M")}
+
+            # JSON 캐시 저장
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            with open(CDJ_CACHE_PATH, "w") as f:
+                json.dump(result, f, ensure_ascii=False, default=str)
+
+            return result, None, "redash"
+        except requests.exceptions.ConnectionError:
+            pass
+        except Exception as e:
+            if not os.path.exists(CDJ_CACHE_PATH):
+                return None, f"Redash 오류: {e}", None
+
+    # 캐시 폴백
+    if os.path.exists(CDJ_CACHE_PATH):
+        try:
+            with open(CDJ_CACHE_PATH) as f:
+                result = json.load(f)
+            mtime = datetime.fromtimestamp(os.path.getmtime(CDJ_CACHE_PATH)).strftime("%m/%d %H:%M")
+            return result, None, f"cache · {mtime}"
+        except Exception as e:
+            return None, f"캐시 읽기 실패: {e}", None
+
+    return None, "REDASH_API_KEY 미설정 + 캐시 없음", None
+
+
+def render_cdj():
+    """CDJ 퍼널 분석 탭 렌더링"""
+
+    # 날짜 필터
+    fc1, fc2 = st.columns([1, 3])
+    with fc1:
+        days = st.selectbox("분석 기간", [7, 14, 30, 60, 90], index=2, format_func=lambda d: f"최근 {d}일")
+
+    data, err, src = load_cdj_data(days)
+    if data is None:
+        st.error(f"CDJ 데이터 로드 실패: {err}")
+        return
+
+    with fc2:
+        badge = "Redash Direct" if src == "redash" else f"Cache ({src})"
+        st.markdown(f'<div style="padding-top:28px;"><span class="data-source-badge">{badge} · {days}일 기준</span></div>', unsafe_allow_html=True)
+
+    funnel = data["funnel"][0] if data["funnel"] else {}
+    events_list = data.get("events", [])
+    dropoff_list = data.get("dropoff", [])
+    buyers = data["buyers"][0] if data.get("buyers") else {}
+    pages_list = data.get("pages", [])
+
+    # ── KPI ──
+    s1 = int(funnel.get("s1_uv", 0))
+    s2 = int(funnel.get("s2_uv", 0))
+    s3 = int(funnel.get("s3_uv", 0))
+    s4 = int(funnel.get("s4_uv", 0))
+    s5 = int(funnel.get("s5_uv", 0))
+    s6 = int(funnel.get("s6_uv", 0))
+    cvr_total = round(s6 / s1 * 100, 2) if s1 else 0
+
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("유입", f"{s1:,}", help="사이트 방문 UV")
+    k2.metric("탐색", f"{s2:,}", f"{round(s2/s1*100,1) if s1 else 0}%")
+    k3.metric("제품 상세", f"{s3:,}", f"{round(s3/s1*100,1) if s1 else 0}%")
+    k4.metric("구매 의사", f"{s4:,}", f"{round(s4/s1*100,1) if s1 else 0}%")
+    k5.metric("체크아웃", f"{s5:,}", f"{round(s5/s1*100,1) if s1 else 0}%")
+    k6.metric("구매 완료", f"{s6:,}", f"CVR {cvr_total}%")
+
+    st.markdown("---")
+
+    # ── 1. 퍼널 깔때기 ──
+    st.markdown('<div class="section-hd">퍼널 전환</div>', unsafe_allow_html=True)
+
+    stages = ["유입", "탐색", "제품 상세", "구매 의사", "체크아웃", "구매 완료"]
+    values = [s1, s2, s3, s4, s5, s6]
+    colors = ["#4a90d9", "#7c5cbf", "#C5A774", "#d4590a", "#891C21", "#2d8a4e"]
+
+    # 잔존율 계산
+    retention = [round(v / s1 * 100, 1) if s1 else 0 for v in values]
+    # 구간 전환율
+    step_cvr = [100.0]
+    for i in range(1, len(values)):
+        step_cvr.append(round(values[i] / values[i-1] * 100, 1) if values[i-1] else 0)
+
+    fig_funnel = go.Figure()
+    fig_funnel.add_trace(go.Funnel(
+        y=stages,
+        x=values,
+        textinfo="value+percent initial",
+        textposition="inside",
+        marker=dict(color=colors),
+        connector=dict(line=dict(color="#444", width=1)),
+    ))
+    fig_funnel.update_layout(
+        **PLOTLY_LAYOUT,
+        height=380,
+        margin=dict(l=10, r=10, t=10, b=10),
+        funnelmode="stack",
+    )
+    st.plotly_chart(fig_funnel, use_container_width=True)
+
+    # 구간 전환율 테이블
+    cvr_data = []
+    for i in range(1, len(stages)):
+        drop = values[i-1] - values[i]
+        cvr_data.append({
+            "구간": f"{stages[i-1]} → {stages[i]}",
+            "전단계 UV": f"{values[i-1]:,}",
+            "현단계 UV": f"{values[i]:,}",
+            "전환율": f"{step_cvr[i]}%",
+            "이탈 수": f"{drop:,}",
+            "이탈률": f"{round(drop/values[i-1]*100,1) if values[i-1] else 0}%",
+        })
+    st.dataframe(pd.DataFrame(cvr_data), hide_index=True, use_container_width=True)
+
+    # 최대 병목 표시
+    max_drop_idx = max(range(1, len(values)), key=lambda i: (values[i-1] - values[i]) if values[i-1] else 0)
+    drop_n = values[max_drop_idx-1] - values[max_drop_idx]
+    drop_r = round(drop_n / values[max_drop_idx-1] * 100, 1) if values[max_drop_idx-1] else 0
+    st.warning(f"최대 병목: {stages[max_drop_idx-1]} → {stages[max_drop_idx]} — {drop_n:,}명 이탈 ({drop_r}%)")
+
+    st.markdown("---")
+
+    # ── 2. 페이지별 UV ──
+    st.markdown('<div class="section-hd">페이지별 UV</div>', unsafe_allow_html=True)
+
+    if pages_list:
+        page_df = pd.DataFrame(pages_list)
+        page_df["uv"] = pd.to_numeric(page_df["uv"], errors="coerce").fillna(0).astype(int)
+        page_df["pv"] = pd.to_numeric(page_df["pv"], errors="coerce").fillna(0).astype(int)
+        page_labels = {"clinic": "클리닉(/@)", "product": "제품 상세", "category": "카테고리(/about)", "promo": "프로모션", "brand": "브랜드", "blog": "블로그", "cart": "장바구니", "checkout": "체크아웃", "complete": "구매완료", "other": "기타"}
+        page_df["page_label"] = page_df["page_type"].map(page_labels).fillna(page_df["page_type"])
+        page_df = page_df.sort_values("uv", ascending=True)
+
+        fig_pages = go.Figure()
+        fig_pages.add_trace(go.Bar(
+            y=page_df["page_label"], x=page_df["uv"],
+            orientation="h", marker_color=CHART_PALETTE[0],
+            text=page_df["uv"].apply(lambda v: f"{v:,}"), textposition="outside",
+        ))
+        fig_pages.update_layout(**PLOTLY_LAYOUT, height=340, margin=dict(l=120, r=60, t=10, b=10))
+        st.plotly_chart(fig_pages, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── 3. 이탈 분석 ──
+    st.markdown('<div class="section-hd">이탈 지점 (제품 조회 후 미구매자)</div>', unsafe_allow_html=True)
+
+    if dropoff_list:
+        drop_df = pd.DataFrame(dropoff_list[:10])
+        drop_df["drop_users"] = pd.to_numeric(drop_df["drop_users"], errors="coerce").fillna(0).astype(int)
+        drop_df["drop_pct"] = pd.to_numeric(drop_df["drop_pct"], errors="coerce").fillna(0)
+        event_labels = {
+            "pv:product": "제품 상세 페이지", "pv:clinic": "클리닉 페이지", "pv:category": "카테고리 페이지",
+            "pv:promo": "프로모션 페이지", "pv:cart": "장바구니", "pv:checkout": "체크아웃", "pv:blog": "블로그", "pv:other": "기타 페이지",
+            "categorySectionImpression": "카테고리 섹션 노출", "productDetailPrescriptionClick": "처방받기 클릭 후",
+            "consultButtonClick": "상담 버튼 클릭 후", "checkoutDetailPurchaseClick": "결제하기 클릭 후",
+            "gnbMenuClick": "GNB 메뉴 클릭 후", "cartPrescriptionClick": "장바구니 처방 클릭 후",
+            "myLocationClick": "내 위치 클릭 후", "districtButtonClick": "지역구 선택 후",
+            "productShareClick": "제품 공유 후", "blogdetailScolldepth": "블로그 스크롤 후",
+            "questionnaireClick": "문진표 작성 후", "clinicCardPlaceClick": "클리닉 위치 클릭 후",
+        }
+        drop_df["label"] = drop_df["last_event"].map(event_labels).fillna(drop_df["last_event"])
+        drop_df = drop_df.sort_values("drop_users", ascending=True)
+
+        fig_drop = go.Figure()
+        fig_drop.add_trace(go.Bar(
+            y=drop_df["label"], x=drop_df["drop_users"],
+            orientation="h",
+            marker_color=["#891C21" if i >= len(drop_df)-1 else "#C5A774" for i in range(len(drop_df))],
+            text=drop_df.apply(lambda r: f"{int(r['drop_users']):,}명 ({r['drop_pct']}%)", axis=1),
+            textposition="outside",
+        ))
+        fig_drop.update_layout(**PLOTLY_LAYOUT, height=360, margin=dict(l=160, r=80, t=10, b=10))
+        st.plotly_chart(fig_drop, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── 4. 이벤트 UV 랭킹 ──
+    st.markdown('<div class="section-hd">이벤트 UV 랭킹 (Segment Track Events)</div>', unsafe_allow_html=True)
+
+    if events_list:
+        ev_df = pd.DataFrame(events_list[:20])
+        ev_df["unique_users"] = pd.to_numeric(ev_df["unique_users"], errors="coerce").fillna(0).astype(int)
+        ev_df["total_fires"] = pd.to_numeric(ev_df["total_fires"], errors="coerce").fillna(0).astype(int)
+        ev_df["avg_fires"] = (ev_df["total_fires"] / ev_df["unique_users"].replace(0, 1)).round(1)
+
+        # 스테이지 매핑
+        stage_map = {
+            "categorySectionImpression": "탐색", "categoryItemClick": "탐색", "aboutItemClick": "탐색",
+            "gnbMenuClick": "유입", "homeListClick": "유입", "homePromotionClick": "유입",
+            "promotionItemClick": "탐색", "viewProductClick": "탐색", "blogdetailScolldepth": "탐색",
+            "productDetailPrescriptionClick": "구매 의사", "productDetailCartClick": "구매 의사",
+            "consultButtonClick": "제품 상세", "productShareClick": "제품 상세",
+            "myLocationClick": "탐색", "districtButtonClick": "탐색",
+            "clinicItemClick": "탐색", "clinicCardLocalhomeClick": "탐색",
+            "cartPrescriptionClick": "구매 의사",
+            "checkoutDetailPurchaseClick": "체크아웃", "questionnaireClick": "체크아웃",
+            "clinicSelectCompleteClick": "체크아웃", "clinicSelectClick": "체크아웃",
+            "signUpStart": "체크아웃", "purchaseFinView": "구매 완료",
+        }
+        ev_df["퍼널 단계"] = ev_df["event"].map(stage_map).fillna("-")
+
+        display_df = ev_df[["event", "unique_users", "total_fires", "avg_fires", "퍼널 단계"]].rename(columns={
+            "event": "이벤트", "unique_users": "UV", "total_fires": "총 발생", "avg_fires": "인당 발생"
+        })
+        st.dataframe(display_df, hide_index=True, use_container_width=True, height=500)
+
+    st.markdown("---")
+
+    # ── 5. 구매자 행동 분석 ──
+    st.markdown('<div class="section-hd">구매자 행동 패턴</div>', unsafe_allow_html=True)
+
+    if buyers:
+        total_b = int(buyers.get("total_buyers", 0))
+        if total_b > 0:
+            behavior_data = [
+                {"행동": "클리닉 페이지 경유", "구매자 수": int(buyers.get("via_clinic", 0)), "비율": f"{round(int(buyers.get('via_clinic',0))/total_b*100,1)}%"},
+                {"행동": "카테고리 페이지 경유", "구매자 수": int(buyers.get("via_category", 0)), "비율": f"{round(int(buyers.get('via_category',0))/total_b*100,1)}%"},
+                {"행동": "처방받기 사용", "구매자 수": int(buyers.get("used_prescription", 0)), "비율": f"{round(int(buyers.get('used_prescription',0))/total_b*100,1)}%"},
+                {"행동": "문진표 작성", "구매자 수": int(buyers.get("used_questionnaire", 0)), "비율": f"{round(int(buyers.get('used_questionnaire',0))/total_b*100,1)}%"},
+                {"행동": "장바구니 조회", "구매자 수": int(buyers.get("saw_cart", 0)), "비율": f"{round(int(buyers.get('saw_cart',0))/total_b*100,1)}%"},
+                {"행동": "프로모션 경유", "구매자 수": int(buyers.get("via_promo", 0)), "비율": f"{round(int(buyers.get('via_promo',0))/total_b*100,1)}%"},
+                {"행동": "한의원 선택 완료", "구매자 수": int(buyers.get("used_clinic_select", 0)), "비율": f"{round(int(buyers.get('used_clinic_select',0))/total_b*100,1)}%"},
+                {"행동": "상담 버튼 사용", "구매자 수": int(buyers.get("used_consult", 0)), "비율": f"{round(int(buyers.get('used_consult',0))/total_b*100,1)}%"},
+                {"행동": "회원가입", "구매자 수": int(buyers.get("used_signup", 0)), "비율": f"{round(int(buyers.get('used_signup',0))/total_b*100,1)}%"},
+                {"행동": "장바구니 담기(Cart Click)", "구매자 수": int(buyers.get("used_cart_click", 0)), "비율": f"{round(int(buyers.get('used_cart_click',0))/total_b*100,1)}%"},
+            ]
+            b_df = pd.DataFrame(behavior_data).sort_values("구매자 수", ascending=False)
+
+            bc1, bc2 = st.columns([1.2, 1])
+            with bc1:
+                fig_b = go.Figure()
+                b_sorted = b_df.sort_values("구매자 수", ascending=True)
+                fig_b.add_trace(go.Bar(
+                    y=b_sorted["행동"], x=b_sorted["구매자 수"],
+                    orientation="h", marker_color=CHART_PALETTE[0],
+                    text=b_sorted["비율"], textposition="outside",
+                ))
+                fig_b.update_layout(**PLOTLY_LAYOUT, height=340, margin=dict(l=140, r=60, t=10, b=10))
+                st.plotly_chart(fig_b, use_container_width=True)
+            with bc2:
+                st.dataframe(b_df, hide_index=True, use_container_width=True, height=340)
+
+            # 인사이트
+            clinic_pct = round(int(buyers.get("via_clinic", 0)) / total_b * 100, 1) if total_b else 0
+            rx_pct = round(int(buyers.get("used_prescription", 0)) / total_b * 100, 1) if total_b else 0
+            st.info(f"구매자 {total_b}명 중 {clinic_pct}%가 클리닉 페이지를 경유하고, {rx_pct}%가 '처방받기' 경로를 사용한다.")
+        else:
+            st.info("해당 기간 내 구매 완료 사용자가 없습니다.")
+
+
 def main():
     df, err, data_source = load_data()
     if not df.empty:
-        t1, t2, t3 = st.tabs(["성과 분석", "전체 UTM 기록", "UTM 생성"])
+        t1, t2, t3, t4 = st.tabs(["성과 분석", "전체 UTM 기록", "UTM 생성", "CDJ 퍼널 분석"])
         with t1: render_dashboard(df, data_source)
         with t2: render_all_utm(df)
         with t3: render_gen()
-    else: st.error(f"데이터 로드 실패: {err}")
+        with t4: render_cdj()
+    else:
+        # UTM 데이터 실패해도 CDJ 탭은 독립 제공
+        t1, t4 = st.tabs(["성과 분석", "CDJ 퍼널 분석"])
+        with t1: st.error(f"UTM 데이터 로드 실패: {err}")
+        with t4: render_cdj()
 
 if __name__ == "__main__": main()

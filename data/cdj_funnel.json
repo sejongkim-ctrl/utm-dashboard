@@ -1,0 +1,320 @@
+{
+  "funnel": [
+    {
+      "s1_uv": 15092,
+      "s2_uv": 8292,
+      "s3_uv": 5652,
+      "s4_uv": 610,
+      "s5_uv": 145,
+      "s6_uv": 61
+    }
+  ],
+  "events": [
+    {
+      "event": "categorySectionImpression",
+      "total_fires": 16390,
+      "unique_users": 4141
+    },
+    {
+      "event": "categoryItemClick",
+      "total_fires": 5985,
+      "unique_users": 3270
+    },
+    {
+      "event": "aboutItemClick",
+      "total_fires": 5987,
+      "unique_users": 2762
+    },
+    {
+      "event": "gnbMenuClick",
+      "total_fires": 3596,
+      "unique_users": 1424
+    },
+    {
+      "event": "promotionItemClick",
+      "total_fires": 1706,
+      "unique_users": 1038
+    },
+    {
+      "event": "homeListClick",
+      "total_fires": 1081,
+      "unique_users": 659
+    },
+    {
+      "event": "productDetailPrescriptionClick",
+      "total_fires": 1062,
+      "unique_users": 584
+    },
+    {
+      "event": "blogdetailScolldepth",
+      "total_fires": 181718,
+      "unique_users": 397
+    },
+    {
+      "event": "homePromotionClick",
+      "total_fires": 638,
+      "unique_users": 314
+    },
+    {
+      "event": "viewProductClick",
+      "total_fires": 358,
+      "unique_users": 299
+    },
+    {
+      "event": "myLocationClick",
+      "total_fires": 511,
+      "unique_users": 271
+    },
+    {
+      "event": "consultButtonClick",
+      "total_fires": 288,
+      "unique_users": 207
+    },
+    {
+      "event": "districtButtonClick",
+      "total_fires": 454,
+      "unique_users": 167
+    },
+    {
+      "event": "clinicItemClick",
+      "total_fires": 266,
+      "unique_users": 121
+    },
+    {
+      "event": "cartPrescriptionClick",
+      "total_fires": 175,
+      "unique_users": 106
+    },
+    {
+      "event": "questionnaireClick",
+      "total_fires": 138,
+      "unique_users": 95
+    },
+    {
+      "event": "clinicCardLocalhomeClick",
+      "total_fires": 127,
+      "unique_users": 85
+    },
+    {
+      "event": "checkoutDetailPurchaseClick",
+      "total_fires": 163,
+      "unique_users": 82
+    },
+    {
+      "event": "productShareClick",
+      "total_fires": 97,
+      "unique_users": 63
+    },
+    {
+      "event": "signUpStart",
+      "total_fires": 79,
+      "unique_users": 62
+    },
+    {
+      "event": "purchaseFinView",
+      "total_fires": 69,
+      "unique_users": 61
+    },
+    {
+      "event": "clinicSelectCompleteClick",
+      "total_fires": 66,
+      "unique_users": 48
+    },
+    {
+      "event": "productDetailCartClick",
+      "total_fires": 28,
+      "unique_users": 26
+    },
+    {
+      "event": "clinicCardPlaceClick",
+      "total_fires": 45,
+      "unique_users": 22
+    },
+    {
+      "event": "promotionShareClick",
+      "total_fires": 12,
+      "unique_users": 11
+    },
+    {
+      "event": "blogKeywordClick",
+      "total_fires": 24,
+      "unique_users": 8
+    },
+    {
+      "event": "clinicSelectClick",
+      "total_fires": 3,
+      "unique_users": 3
+    },
+    {
+      "event": "blogdetailShareclick",
+      "total_fires": 1,
+      "unique_users": 1
+    }
+  ],
+  "dropoff": [
+    {
+      "last_event": "pv:product",
+      "drop_users": 2885,
+      "drop_pct": 51.59
+    },
+    {
+      "last_event": "pv:clinic",
+      "drop_users": 761,
+      "drop_pct": 13.61
+    },
+    {
+      "last_event": "pv:other",
+      "drop_users": 495,
+      "drop_pct": 8.85
+    },
+    {
+      "last_event": "pv:promo",
+      "drop_users": 451,
+      "drop_pct": 8.07
+    },
+    {
+      "last_event": "pv:category",
+      "drop_users": 366,
+      "drop_pct": 6.55
+    },
+    {
+      "last_event": "categorySectionImpression",
+      "drop_users": 335,
+      "drop_pct": 5.99
+    },
+    {
+      "last_event": "productDetailPrescriptionClick",
+      "drop_users": 99,
+      "drop_pct": 1.77
+    },
+    {
+      "last_event": "pv:cart",
+      "drop_users": 26,
+      "drop_pct": 0.46
+    },
+    {
+      "last_event": "myLocationClick",
+      "drop_users": 21,
+      "drop_pct": 0.38
+    },
+    {
+      "last_event": "productShareClick",
+      "drop_users": 20,
+      "drop_pct": 0.36
+    },
+    {
+      "last_event": "districtButtonClick",
+      "drop_users": 17,
+      "drop_pct": 0.3
+    },
+    {
+      "last_event": "consultButtonClick",
+      "drop_users": 17,
+      "drop_pct": 0.3
+    },
+    {
+      "last_event": "pv:checkout",
+      "drop_users": 17,
+      "drop_pct": 0.3
+    },
+    {
+      "last_event": "gnbMenuClick",
+      "drop_users": 13,
+      "drop_pct": 0.23
+    },
+    {
+      "last_event": "blogdetailScolldepth",
+      "drop_users": 11,
+      "drop_pct": 0.2
+    },
+    {
+      "last_event": "cartPrescriptionClick",
+      "drop_users": 7,
+      "drop_pct": 0.13
+    },
+    {
+      "last_event": "checkoutDetailPurchaseClick",
+      "drop_users": 7,
+      "drop_pct": 0.13
+    },
+    {
+      "last_event": "clinicCardPlaceClick",
+      "drop_users": 7,
+      "drop_pct": 0.13
+    },
+    {
+      "last_event": "questionnaireClick",
+      "drop_users": 6,
+      "drop_pct": 0.11
+    },
+    {
+      "last_event": "pv:blog",
+      "drop_users": 5,
+      "drop_pct": 0.09
+    }
+  ],
+  "buyers": [
+    {
+      "total_buyers": 61,
+      "via_clinic": 61,
+      "via_category": 50,
+      "via_promo": 22,
+      "used_prescription": 53,
+      "used_cart_click": 2,
+      "used_questionnaire": 60,
+      "used_clinic_select": 22,
+      "used_consult": 7,
+      "used_signup": 7,
+      "saw_cart": 23
+    }
+  ],
+  "pages": [
+    {
+      "page_type": "clinic",
+      "uv": 8292,
+      "pv": 45000
+    },
+    {
+      "page_type": "product",
+      "uv": 5652,
+      "pv": 28000
+    },
+    {
+      "page_type": "category",
+      "uv": 4815,
+      "pv": 18000
+    },
+    {
+      "page_type": "promo",
+      "uv": 2880,
+      "pv": 9500
+    },
+    {
+      "page_type": "brand",
+      "uv": 660,
+      "pv": 2200
+    },
+    {
+      "page_type": "blog",
+      "uv": 516,
+      "pv": 3800
+    },
+    {
+      "page_type": "cart",
+      "uv": 357,
+      "pv": 1200
+    },
+    {
+      "page_type": "checkout",
+      "uv": 145,
+      "pv": 850
+    },
+    {
+      "page_type": "complete",
+      "uv": 61,
+      "pv": 130
+    }
+  ],
+  "days": 30,
+  "updated": "2026-03-10 19:00"
+}
