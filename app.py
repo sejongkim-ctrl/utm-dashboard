@@ -1021,7 +1021,7 @@ def render_cdj():
     # 날짜 필터
     fc1, fc2 = st.columns([1, 3])
     with fc1:
-        days = st.selectbox("분석 기간", [7, 14, 30, 60, 90], index=2, format_func=lambda d: f"최근 {d}일")
+        days = st.number_input("분석 기간 (일)", min_value=1, max_value=365, value=30, step=1, help="최근 N일 기준 데이터 조회 (Redash 직접 모드에서 실시간 반영)")
 
     data, err, src = load_cdj_data(days)
     if data is None:
@@ -1084,7 +1084,6 @@ def render_cdj():
         **PLOTLY_LAYOUT,
         height=380,
         margin=dict(l=10, r=10, t=10, b=10),
-        funnelmode="stack",
     )
     st.plotly_chart(fig_funnel, use_container_width=True)
 
