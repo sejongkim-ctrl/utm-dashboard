@@ -34,6 +34,7 @@ DAILY_UTM_SQL = """
 WITH utm_visits AS (
   SELECT
     anonymousid,
+    userid,
     CASE WHEN context_page_url LIKE '%utm_source=%'
       THEN SPLIT_PART(SPLIT_PART(context_page_url, 'utm_source=', 2), '&', 1)
       ELSE NULL END AS utm_source,
@@ -63,9 +64,12 @@ params AS (
   GROUP BY utm_content, utm_source, utm_medium, utm_campaign
 ),
 purchases AS (
-  SELECT anonymousid, "timestamp" as purchase_ts
+  -- 테스트한의원 결제 제외 (실제 구매만 추적)
+  SELECT anonymousid, userid, "timestamp" as purchase_ts
   FROM soo_segment.segment_log
   WHERE event = 'purchaseFinView'
+    AND (properties IS NULL
+         OR COALESCE(properties."clinicName"::VARCHAR, '') != '테스트한의원')
 ),
 daily_metrics AS (
   SELECT
@@ -78,7 +82,11 @@ daily_metrics AS (
       AND p.purchase_ts <= DATEADD(day, 3, u.visit_ts) THEN u.anonymousid END) AS purchase_3d,
     COUNT(DISTINCT CASE WHEN p.anonymousid IS NOT NULL THEN u.anonymousid END) AS purchase_7d
   FROM utm_visits u
-  LEFT JOIN purchases p ON u.anonymousid = p.anonymousid
+  -- anonymousid 직접 매칭 OR 로그인 사용자는 userid로 매칭
+  LEFT JOIN purchases p ON (
+      u.anonymousid = p.anonymousid
+      OR (u.userid IS NOT NULL AND p.userid IS NOT NULL AND u.userid = p.userid)
+    )
     AND p.purchase_ts >= u.visit_ts
     AND p.purchase_ts <= DATEADD(day, 7, u.visit_ts)
   WHERE u.utm_content IS NOT NULL AND u.utm_content != ''
@@ -94,7 +102,10 @@ content_totals AS (
       AND p.purchase_ts <= DATEADD(day, 3, u.visit_ts) THEN u.anonymousid END) AS total_purchase_3d,
     COUNT(DISTINCT CASE WHEN p.anonymousid IS NOT NULL THEN u.anonymousid END) AS total_purchase_7d
   FROM utm_visits u
-  LEFT JOIN purchases p ON u.anonymousid = p.anonymousid
+  LEFT JOIN purchases p ON (
+      u.anonymousid = p.anonymousid
+      OR (u.userid IS NOT NULL AND p.userid IS NOT NULL AND u.userid = p.userid)
+    )
     AND p.purchase_ts >= u.visit_ts
     AND p.purchase_ts <= DATEADD(day, 7, u.visit_ts)
   WHERE u.utm_content IS NOT NULL AND u.utm_content != ''
@@ -126,10 +137,10 @@ ORDER BY d.visit_date DESC, d.unique_visitors DESC
 # Revenue + Products SQL (utm_content별 매출/품목 — 1d/3d/7d 조건부 집계)
 REVENUE_PRODUCTS_SQL = """
 WITH utm_visits AS (
-  SELECT DISTINCT anonymousid,
-    CASE WHEN context_page_url LIKE '%&utm_content=%'
-      THEN SPLIT_PART(SPLIT_PART(context_page_url, 'utm_content=', 2), '&', 1)
-      WHEN context_page_url LIKE '%?utm_content=%'
+  SELECT
+    anonymousid,
+    userid,
+    CASE WHEN context_page_url LIKE '%utm_content=%'
       THEN SPLIT_PART(SPLIT_PART(context_page_url, 'utm_content=', 2), '&', 1)
       ELSE NULL END AS utm_content,
     "timestamp" as visit_ts,
@@ -137,18 +148,27 @@ WITH utm_visits AS (
   FROM soo_segment.segment_log WHERE context_page_url LIKE '%utm_content=%'
 ),
 purchases AS (
-  SELECT anonymousid,
+  -- 테스트한의원 결제 제외 (실제 구매만 집계)
+  SELECT anonymousid, userid,
     properties."purchaseAmount"::BIGINT AS purchase_amount,
     properties."productName"::VARCHAR AS product_name,
     "timestamp" as purchase_ts,
     messageid
-  FROM soo_segment.segment_log WHERE event = 'purchaseFinView' AND properties IS NOT NULL
+  FROM soo_segment.segment_log
+  WHERE event = 'purchaseFinView'
+    AND properties IS NOT NULL
+    AND COALESCE(properties."clinicName"::VARCHAR, '') != '테스트한의원'
 ),
 utm_purchases AS (
   SELECT u.utm_content, u.visit_date, p.purchase_amount, p.product_name, p.messageid,
     MAX(CASE WHEN p.purchase_ts <= DATEADD(day, 1, u.visit_ts) THEN 1 ELSE 0 END) AS within_1d,
     MAX(CASE WHEN p.purchase_ts <= DATEADD(day, 3, u.visit_ts) THEN 1 ELSE 0 END) AS within_3d
-  FROM utm_visits u JOIN purchases p ON u.anonymousid = p.anonymousid
+  FROM utm_visits u
+  -- anonymousid 직접 매칭 OR 로그인 사용자는 userid로 매칭
+  JOIN purchases p ON (
+      u.anonymousid = p.anonymousid
+      OR (u.userid IS NOT NULL AND p.userid IS NOT NULL AND u.userid = p.userid)
+    )
     AND p.purchase_ts >= u.visit_ts
     AND p.purchase_ts <= DATEADD(day, 7, u.visit_ts)
   WHERE u.utm_content IS NOT NULL
